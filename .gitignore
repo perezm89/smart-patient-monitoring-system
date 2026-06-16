@@ -1,0 +1,27 @@
+
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+logs/
+
+# Build folders
+dist/
+build/
+
+# Coverage
+coverage/
+
+# VSCode
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PlatformIO
+.pio/
