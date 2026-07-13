@@ -1,11 +1,8 @@
 {
-  "deviceId": "ESP32_01",
-  "heartRate": 78,
-  "spo2": 98,
-  "temperature": 98.6,
-  "fallDetected": false,
-  "sosPressed": false,
-  "batteryLevel": 84,
-  "deviceStatus": "ONLINE",
-  "timestamp": "2026-06-17T16:00:00Z"
+  "deviceId": "ESP32-C6-001",
+  "patientId": "PATIENT-001",
+  "timestamp": "2026-07-12T22:00:00Z",
+  "heartRateBpm": 72,
+  "spo2Percent": 98,
+  "skinTemperatureC": 36.8
 }
