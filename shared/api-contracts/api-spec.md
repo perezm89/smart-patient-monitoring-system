@@ -1,5 +1,5 @@
 # Smart Patient Monitoring System
-## REST API Specification (Version 1)
+# REST API Specification (Version 1)
 
 ---
 
@@ -16,30 +16,32 @@ The backend provides secure communication between:
 
 All protected routes require JSON Web Token (JWT) authentication unless otherwise noted.
 
+Unless specified otherwise, all request and response bodies use JSON.
+
 ---
 
 # Authentication
 
 ## Register User
 
-POST /api/v1/auth/register
+**POST** `/api/v1/auth/register`
 
-Description:
+**Description:**
 Creates a new patient or caregiver account.
 
-Authentication:
+**Authentication:**
 Not Required
 
 ---
 
 ## Login
 
-POST /api/v1/auth/login
+**POST** `/api/v1/auth/login`
 
-Description:
-Authenticates a user and returns a JWT.
+**Description:**
+Authenticates a user and returns a JSON Web Token (JWT).
 
-Authentication:
+**Authentication:**
 Not Required
 
 ---
@@ -48,21 +50,50 @@ Not Required
 
 ## Upload Vitals
 
-POST /api/v1/vitals
+**POST** `/api/v1/vitals`
 
-Description:
+**Description:**
 Receives routine vital-sign readings from the ESP32-C6 wearable device.
 
-Authentication:
+**Authentication:**
 Device Authentication (Future)
+
+### Request Header
+
+```http
+Content-Type: application/json
+```
+
+### Request Body
+
+See:
+
+`vitals-payload-v1.json`
+
+### Successful Response
+
+**HTTP Status:** `201 Created`
+
+```json
+{
+  "success": true,
+  "message": "Vital-sign reading stored successfully"
+}
+```
+
+### Initial Development Note
+
+During initial firmware and backend integration, device authentication is **not** required.
+
+Future versions of the backend will authenticate registered devices before accepting uploaded data.
 
 ---
 
 ## Upload Device Event
 
-POST /api/v1/events
+**POST** `/api/v1/events`
 
-Description:
+**Description:**
 Receives emergency events such as:
 
 - Fall Detection
@@ -70,31 +101,31 @@ Receives emergency events such as:
 - Low Battery
 - Connection Loss
 
-Authentication:
+**Authentication:**
 Device Authentication (Future)
 
 ---
 
 ## Upload Device Status
 
-POST /api/v1/device-status
+**POST** `/api/v1/device-status`
 
-Description:
+**Description:**
 Receives battery level, connection status, firmware version, and charging state.
 
-Authentication:
+**Authentication:**
 Device Authentication (Future)
 
 ---
 
 ## Bulk Synchronization
 
-POST /api/v1/vitals/bulk
+**POST** `/api/v1/vitals/bulk`
 
-Description:
+**Description:**
 Uploads readings stored locally while network connectivity was unavailable.
 
-Authentication:
+**Authentication:**
 Device Authentication (Future)
 
 ---
@@ -103,36 +134,36 @@ Device Authentication (Future)
 
 ## Retrieve Own Vitals
 
-GET /api/v1/patients/me/vitals
+**GET** `/api/v1/patients/me/vitals`
 
-Description:
+**Description:**
 Returns current and historical vital-sign readings for the authenticated patient.
 
-Authentication:
+**Authentication:**
 Patient JWT Required
 
 ---
 
 ## Retrieve Own Alerts
 
-GET /api/v1/patients/me/alerts
+**GET** `/api/v1/patients/me/alerts`
 
-Description:
+**Description:**
 Returns alerts generated for the authenticated patient.
 
-Authentication:
+**Authentication:**
 Patient JWT Required
 
 ---
 
 ## Retrieve Own Device Status
 
-GET /api/v1/patients/me/device-status
+**GET** `/api/v1/patients/me/device-status`
 
-Description:
+**Description:**
 Returns battery level, connection status, firmware version, and charging state.
 
-Authentication:
+**Authentication:**
 Patient JWT Required
 
 ---
@@ -141,48 +172,48 @@ Patient JWT Required
 
 ## Retrieve Assigned Patients
 
-GET /api/v1/caregivers/me/patients
+**GET** `/api/v1/caregivers/me/patients`
 
-Description:
+**Description:**
 Returns patients currently assigned to the authenticated caregiver.
 
-Authentication:
+**Authentication:**
 Caregiver JWT Required
 
 ---
 
 ## Retrieve Assigned Patient Vitals
 
-GET /api/v1/caregivers/me/patients/:patientId/vitals
+**GET** `/api/v1/caregivers/me/patients/:patientId/vitals`
 
-Description:
+**Description:**
 Returns current and historical vital-sign readings for an assigned patient.
 
-Authentication:
+**Authentication:**
 Caregiver JWT Required
 
 ---
 
 ## Retrieve Assigned Patient Alerts
 
-GET /api/v1/caregivers/me/patients/:patientId/alerts
+**GET** `/api/v1/caregivers/me/patients/:patientId/alerts`
 
-Description:
+**Description:**
 Returns alert history for an assigned patient.
 
-Authentication:
+**Authentication:**
 Caregiver JWT Required
 
 ---
 
 ## Retrieve Assigned Device Status
 
-GET /api/v1/caregivers/me/patients/:patientId/device-status
+**GET** `/api/v1/caregivers/me/patients/:patientId/device-status`
 
-Description:
+**Description:**
 Returns the current wearable-device status for an assigned patient.
 
-Authentication:
+**Authentication:**
 Caregiver JWT Required
 
 ---
@@ -191,13 +222,62 @@ Caregiver JWT Required
 
 ## Health Check
 
-GET /api/v1/health
+**GET** `/api/v1/health`
 
-Description:
+**Description:**
 Verifies that the backend service is operational.
 
-Authentication:
+**Authentication:**
 Not Required
+
+**Successful Response**
+
+**HTTP Status:** `200 OK`
+
+```json
+{
+  "status": "OK",
+  "service": "Smart Patient Monitoring API"
+}
+```
+
+---
+
+# General API Conventions
+
+## Content Type
+
+All requests that include a body must send:
+
+```http
+Content-Type: application/json
+```
+
+## Timestamp Format
+
+All timestamps shall use UTC in ISO 8601 format.
+
+Example:
+
+```text
+2026-07-12T22:00:00Z
+```
+
+## JSON Naming Convention
+
+JSON property names use **camelCase**.
+
+Example:
+
+```json
+{
+  "heartRateBpm": 72,
+  "spo2Percent": 98,
+  "skinTemperatureC": 36.8
+}
+```
+
+Numeric measurements should be transmitted as JSON numbers rather than strings.
 
 ---
 
