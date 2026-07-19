@@ -4,6 +4,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
+const vitalsRoutes = require('./routes/vitals');
 
 // Create the Express application instance
 const app = express();
@@ -20,6 +21,7 @@ app.use(helmet());
 app.use(morgan('dev'));
 // Automatically parse incoming JSON request bodies
 app.use(express.json());
+app.use('/api/v1/vitals', vitalsRoutes);
 
 /*
   Used to verify that the backend server is running correctly.
