@@ -497,7 +497,6 @@ esp_err_t max30102_collect_samples(uint32_t *red_samples, uint32_t *ir_samples, 
             return ret;
         }
     }
-    printf("Collected %u PPG samples successfully.\n", (unsigned int)collected_samples);
     return ESP_OK;
 }
 
