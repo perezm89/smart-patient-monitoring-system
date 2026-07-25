@@ -19,13 +19,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-
+#include "wifi_manager.h"
 #include "i2c_interface.h"
 #include "tmp117.h"
 #include "max30102.h"
 #include "signal_processing.h"
 #include "heart_rate.h"
 #include "spo2.h"
+#include "json_formatter.h"
+
 
 /******************************************************************************
  * Configuration Constants
@@ -58,6 +60,11 @@ static float ir_filtered_samples[PPG_SAMPLE_COUNT];
 /******************************************************************************
  * Application Entry Point
  ******************************************************************************/
+
+#define WIFI_SSID      "wifi name goes here"
+#define WIFI_PASSWORD  "password goes here"
+#define DEVICE_ID   "ESP32-C6-001"
+#define PATIENT_ID  "PATIENT-001"
 
 /**
  * @brief Main application entry point.
@@ -123,7 +130,7 @@ void app_main(void)
     /*
      * Brief delay before attempting to read the device ID.
      */
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     uint8_t part_id = 0;
 
@@ -208,6 +215,30 @@ void app_main(void)
     }
 
     printf("Sensor initialization complete.\n");
+
+    /**************************************************************************
+     * Wi-Fi Connection
+     **************************************************************************/
+
+    ret = wifi_manager_connect(
+        WIFI_SSID,
+        WIFI_PASSWORD
+    );
+
+    if(ret != ESP_OK)
+    {
+        printf(
+            "Wi-Fi connection failed: %s\n",
+            esp_err_to_name(ret)
+        );
+
+        printf("Continuing in offline mode.\n");
+    }
+    else
+    {
+        printf("Wi-Fi connected successfully.\n");
+    }
+
     printf("Beginning measurement loop...\n\n");
 
     /**************************************************************************
@@ -495,6 +526,24 @@ void app_main(void)
                 "Heart rate could not be calculated. "
                 "Keep the sensor steady and maintain contact.\n"
             );
+        }
+
+        char json_buffer[JSON_BUFFER_SIZE];
+
+        ret = json_format_sensor_data(
+            json_buffer,
+            sizeof(json_buffer),
+            DEVICE_ID,
+            PATIENT_ID,
+            "2026-07-12T22:00:00Z",
+            (int)bpm,
+            (int)spo2_result.spo2_percent,
+            temperature_c
+        );
+
+        if(ret == ESP_OK)
+        {
+            printf("%s\n", json_buffer);
         }
 
         printf(
