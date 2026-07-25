@@ -15,6 +15,7 @@
  * Includes
  ******************************************************************************/
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "driver/i2c_master.h"
@@ -32,9 +33,11 @@
  ******************************************************************************/
 
 #define MAX30102_REG_PART_ID            0xFF
+#define MAX30102_PART_ID                0x15
 
 #define MAX30102_REG_MODE_CONFIG        0x09
 
+#define MAX30102_FIFO_POINTER_RESET     0x00
 #define MAX30102_REG_FIFO_WR_PTR        0x04
 #define MAX30102_REG_OVF_COUNTER        0x05
 #define MAX30102_REG_FIFO_RD_PTR        0x06
@@ -44,6 +47,17 @@
 
 #define MAX30102_REG_LED_RED_PA         0x0C
 #define MAX30102_REG_LED_IR_PA          0x0D
+
+#define MAX30102_REG_FIFO_CONFIG         0x08
+
+#define MAX30102_FIFO_SAMPLE_AVERAGE_1   0x00
+#define MAX30102_FIFO_ROLLOVER_ENABLE    0x10
+#define MAX30102_FIFO_ALMOST_FULL_17     0x0F
+
+#define MAX30102_FIFO_CONFIG_DEFAULT     \
+    (MAX30102_FIFO_SAMPLE_AVERAGE_1 |    \
+     MAX30102_FIFO_ROLLOVER_ENABLE |     \
+     MAX30102_FIFO_ALMOST_FULL_17)
 
 /******************************************************************************
  * Register Configuration Values
@@ -117,5 +131,37 @@ esp_err_t max30102_start_measurement(void);
  * @return Error code if the I2C transaction fails.
  */
 esp_err_t max30102_read_fifo(uint32_t *red_data, uint32_t *ir_data);
+
+/**
+ * @brief Clears the FIFO write pointer, read pointer, and overflow counter.
+ *
+ * Any unread samples currently stored in the FIFO are discarded.
+ *
+ * @return ESP_OK if all FIFO registers are reset successfully.
+ * @return Error code if an I2C write fails.
+ */
+esp_err_t max30102_clear_fifo(void);
+
+/**
+ * @brief Collects a fixed number of fresh Red and IR PPG samples.
+ *
+ * Clears the MAX30102 FIFO and waits until the requested number of samples
+ * has been collected. Each FIFO sample contains one Red value and one IR
+ * value stored at matching indices in the output buffers.
+ *
+ * @param[out] red_samples Buffer where Red samples are stored.
+ * @param[out] ir_samples Buffer where IR samples are stored.
+ * @param[in] sample_count Number of samples to collect.
+ * @param[in] timeout_ms Maximum time allowed for sample collection,
+ *                       measured in milliseconds.
+ *
+ * @return ESP_OK if all requested samples were collected.
+ * @return ESP_ERR_INVALID_ARG if either output buffer is NULL,
+ *         sample_count is zero, or timeout_ms is zero.
+ * @return ESP_ERR_TIMEOUT if the requested samples are not collected
+ *         before the timeout expires.
+ * @return Error code if clearing or reading the FIFO fails.
+ */
+esp_err_t max30102_collect_samples(uint32_t *red_samples, uint32_t *ir_samples, size_t sample_count, uint32_t timeout_ms);
 
 #endif

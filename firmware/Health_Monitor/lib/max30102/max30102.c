@@ -15,7 +15,9 @@
 #include "max30102.h"
 #include "i2c_interface.h"
 
-#include <stddef.h>
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 /******************************************************************************
  * Private Variables
@@ -45,7 +47,8 @@ static esp_err_t max30102_configure_leds(void);
 /* Private FIFO functions
  * Read the number of unread samples currently stored in the FIFO.
  */
-static uint8_t max30102_get_fifo_samples(void);
+static esp_err_t max30102_get_fifo_samples(uint8_t *sample_count);
+static esp_err_t max30102_configure_fifo(void);
 
 /******************************************************************************
  * Public Functions
@@ -65,7 +68,7 @@ esp_err_t max30102_init(void)
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = MAX30102_I2C_ADDR,
-        .scl_speed_hz = 100000,
+        .scl_speed_hz = I2C_FREQ_HZ,
     };
 
     return i2c_master_bus_add_device(i2c_bus, &dev_cfg, &max30102_handle);
@@ -109,6 +112,20 @@ esp_err_t max30102_start_measurement(void)
 
     if(ret != ESP_OK)
     {
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    ret = max30102_clear_fifo();
+
+    if(ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    ret = max30102_configure_fifo();
+    if(ret != ESP_OK){
         return ret;
     }
 
@@ -158,16 +175,17 @@ esp_err_t max30102_read_fifo(uint32_t *red_data, uint32_t *ir_data)
         return ESP_ERR_INVALID_ARG;
     }
 
-    uint8_t fifo_samples = max30102_get_fifo_samples();
-
+    uint8_t fifo_samples = 0;
+    esp_err_t ret = max30102_get_fifo_samples(&fifo_samples);
+    if(ret != ESP_OK){
+        return ret;
+    }
     if(fifo_samples == 0)
     {
         return ESP_ERR_NOT_FOUND;
     }
 
     uint8_t fifo_data[MAX30102_FIFO_SAMPLE_SIZE];
-
-    esp_err_t ret;
 
     ret = max30102_read_register(
         MAX30102_REG_FIFO_DATA,
@@ -199,6 +217,44 @@ esp_err_t max30102_read_fifo(uint32_t *red_data, uint32_t *ir_data)
     *ir_data &= 0x03FFFF;
 
     return ESP_OK;
+}
+
+/**
+ * @brief Clears the FIFO write pointer, read pointer, and overflow counter.
+ *
+ * Any unread samples currently stored in the FIFO are discarded.
+ *
+ * @return ESP_OK if all FIFO registers are reset successfully.
+ * @return Error code if an I2C write fails.
+ */
+esp_err_t max30102_clear_fifo(void)
+{
+    esp_err_t ret;
+
+    ret = max30102_write_register(
+        MAX30102_REG_FIFO_WR_PTR,
+        MAX30102_FIFO_POINTER_RESET
+    );
+
+    if(ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    ret = max30102_write_register(
+        MAX30102_REG_OVF_COUNTER,
+        MAX30102_FIFO_POINTER_RESET
+    );
+
+    if(ret != ESP_OK)
+    {
+        return ret;
+    }
+
+    return max30102_write_register(
+        MAX30102_REG_FIFO_RD_PTR,
+        MAX30102_FIFO_POINTER_RESET
+    );
 }
 
 /******************************************************************************
@@ -340,37 +396,120 @@ static esp_err_t max30102_configure_leds(void)
 }
 
 /**
- * @brief Returns the number of unread samples in the FIFO.
+ * @brief Retrieves the number of unread samples stored in the FIFO.
  *
- * Reads the FIFO write and read pointers and calculates the number of
- * samples currently waiting to be processed, accounting for pointer
- * wrap-around.
+ * Reads the FIFO write and read pointers, then calculates how many sample
+ * pairs are currently available for processing. The calculation accounts
+ * for the FIFO pointers wrapping around at the end of the buffer.
  *
- * @return Number of unread FIFO samples.
+ * @param[out] sample_count Pointer where the number of unread samples
+ *                          will be stored.
+ *
+ * @return ESP_OK if the sample count was retrieved successfully.
+ * @return ESP_ERR_INVALID_ARG if sample_count is NULL.
+ * @return Error code if either FIFO pointer cannot be read.
  */
-static uint8_t max30102_get_fifo_samples(void)
-{
-    uint8_t write_ptr;
-    uint8_t read_ptr;
+static esp_err_t max30102_get_fifo_samples(uint8_t *sample_count){
+    if(sample_count == NULL){
+        return ESP_ERR_INVALID_ARG;
+    }
 
-    max30102_read_register(
-        MAX30102_REG_FIFO_WR_PTR,
-        &write_ptr,
-        1
-    );
+    uint8_t write_ptr = 0;
+    uint8_t read_ptr = 0;
 
-    max30102_read_register(
-        MAX30102_REG_FIFO_RD_PTR,
-        &read_ptr,
-        1
-    );
+    esp_err_t ret = max30102_read_register(MAX30102_REG_FIFO_WR_PTR, &write_ptr, 1);
+    if(ret != ESP_OK){
+        return ret;
+    }
+
+    ret = max30102_read_register(MAX30102_REG_FIFO_RD_PTR, &read_ptr, 1);
+    if(ret != ESP_OK){
+        return ret;
+    }
+
+    write_ptr &= 0x1F;
+    read_ptr &= 0x1F;
 
     if(write_ptr >= read_ptr)
     {
-        return write_ptr - read_ptr;
+        *sample_count = write_ptr - read_ptr;
     }
     else
     {
-        return (MAX30102_FIFO_DEPTH - read_ptr) + write_ptr;
+        *sample_count = (MAX30102_FIFO_DEPTH - read_ptr) + write_ptr;
     }
+    return ESP_OK;
+}
+
+/**
+ * @brief Collects a fixed number of fresh Red and IR PPG samples.
+ *
+ * Clears the MAX30102 FIFO and repeatedly reads available samples until the
+ * requested number has been collected. When the FIFO is temporarily empty,
+ * the task briefly yields before checking again.
+ *
+ * @param[out] red_samples Buffer where Red samples are stored.
+ * @param[out] ir_samples Buffer where IR samples are stored.
+ * @param[in] sample_count Number of samples to collect.
+ * @param[in] timeout_ms Maximum collection time in milliseconds.
+ *
+ * @return ESP_OK if all requested samples were collected.
+ * @return ESP_ERR_INVALID_ARG if an argument is invalid.
+ * @return ESP_ERR_TIMEOUT if sample collection exceeds timeout_ms.
+ * @return Error code if a MAX30102 FIFO operation fails.
+ */
+esp_err_t max30102_collect_samples(uint32_t *red_samples, uint32_t *ir_samples, size_t sample_count, uint32_t timeout_ms){
+    if(red_samples == NULL || ir_samples == NULL || sample_count == 0 || timeout_ms == 0){
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t ret = max30102_clear_fifo();
+
+    if(ret != ESP_OK){
+        return ret;
+    }
+
+    size_t collected_samples = 0;
+    int64_t start_time_us = esp_timer_get_time();
+
+    while(collected_samples < sample_count){
+        int64_t elapsed_time_ms = (esp_timer_get_time() - start_time_us) / 1000;
+        if(elapsed_time_ms >= timeout_ms){
+            printf("MAX30102 timeout: collected %u of %u samples\n", (unsigned int)collected_samples, (unsigned int)sample_count);
+            return ESP_ERR_TIMEOUT;
+        }
+
+        uint32_t red_sample = 0;
+        uint32_t ir_sample = 0;
+
+        ret = max30102_read_fifo(&red_sample, &ir_sample);
+
+        if(ret == ESP_OK){
+            red_samples[collected_samples] = red_sample;
+            ir_samples[collected_samples] = ir_sample;
+
+            collected_samples++;
+        }
+        else if(ret == ESP_ERR_NOT_FOUND){
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        else{
+            return ret;
+        }
+    }
+    printf("Collected %u PPG samples successfully.\n", (unsigned int)collected_samples);
+    return ESP_OK;
+}
+
+/**
+ * @brief Configures the MAX30102 FIFO.
+ *
+ * Disables sample averaging, enables FIFO rollover, and configures the
+ * almost-full threshold.
+ *
+ * @return ESP_OK if the FIFO configuration succeeds.
+ * @return Error code if the I2C transaction fails.
+ */
+static esp_err_t max30102_configure_fifo(void){
+    return max30102_write_register(MAX30102_REG_FIFO_CONFIG, MAX30102_FIFO_CONFIG_DEFAULT);
 }

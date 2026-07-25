@@ -27,7 +27,7 @@
  *
  * @return Mean sample value, or 0.0f if the input is invalid.
  */
-float signal_mean(const uint32_t *samples, size_t sample_count);
+float signal_mean(const float *samples, size_t sample_count);
 
 /**
  * @brief Removes the DC component from a signal.
@@ -39,7 +39,7 @@ float signal_mean(const uint32_t *samples, size_t sample_count);
  * @param output Pointer to the output buffer.
  * @param sample_count Number of samples in the buffer.
  */
-void signal_remove_dc(const uint32_t *input, float *output, size_t sample_count);
+void signal_remove_dc(const float *input, float *output, size_t sample_count);
 
 /**
  * @brief Applies a trailing moving-average filter to a signal.
@@ -100,5 +100,14 @@ float signal_min(const float *samples, size_t sample_count);
  * @return Maximum sample value, or 0.0f if the input is invalid.
  */
 float signal_max(const float *samples, size_t sample_count);
+
+/**
+ * @brief Converts uint32_t input sample buffer to a float type.
+ *
+ * @param input Pointer to the raw input samples.
+ * @param output Pointer to the output buffer.
+ * @param sample_count Number of samples in the buffer.
+ */
+void signal_convert_u32_to_float(const uint32_t *input, float *output, size_t sample_count);
 
 #endif

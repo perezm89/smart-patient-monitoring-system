@@ -20,6 +20,24 @@
 #include <math.h>
 
 /**
+ * @brief Converts uint32_t input sample buffer to a float type.
+ *
+ * @param input Pointer to the raw input samples.
+ * @param output Pointer to the output buffer.
+ * @param sample_count Number of samples in the buffer.
+ */
+void signal_convert_u32_to_float(const uint32_t *input, float *output, size_t sample_count){
+    if(input == NULL || output == NULL || sample_count == 0)
+    {
+        return;
+    }
+
+    for(size_t i = 0; i < sample_count; i++){
+        output[i] = (float)input[i];
+    }
+}
+
+/**
  * @brief Finds the minimum value in a signal buffer.
  *
  * @param samples Pointer to the input sample buffer.
@@ -97,20 +115,20 @@ float signal_peak_to_peak(const float *samples, size_t sample_count){
  *
  * @return Mean sample value, or 0.0f if the input is invalid.
  */
-float signal_mean(const uint32_t *samples, size_t sample_count){
+float signal_mean(const float *samples, size_t sample_count){
     if(samples == NULL || sample_count == 0)
     {
         return 0.0f;
     }
 
-    uint64_t sum = 0;
+    float sum = 0.0f;
 
     for(size_t i = 0; i < sample_count; i++)
     {
         sum += samples[i];
     }
 
-    return (float)sum / (float)sample_count;
+    return sum / (float)sample_count;
 }
 
 /**
@@ -123,7 +141,7 @@ float signal_mean(const uint32_t *samples, size_t sample_count){
  * @param output Pointer to the output buffer.
  * @param sample_count Number of samples in the buffer.
  */
-void signal_remove_dc(const uint32_t *input, float *output, size_t sample_count){
+void signal_remove_dc(const float *input, float *output, size_t sample_count){
     if(input==NULL || output==NULL || sample_count==0){
         return;
     }
@@ -131,7 +149,7 @@ void signal_remove_dc(const uint32_t *input, float *output, size_t sample_count)
     float mean = signal_mean(input, sample_count);
 
     for(size_t i = 0; i < sample_count; i++){
-        output[i] = (float)input[i] - mean;
+        output[i] = input[i] - mean;
     }
 }
 
@@ -152,25 +170,21 @@ void signal_moving_average(const float *input, float *output, size_t sample_coun
         return;
     }
 
-    for(size_t i = 0; i < sample_count; i++){
-        size_t start;
+    float running_sum = 0.0f;
 
-        if(i+1 >= window_size){
-            start = i+1 - window_size;
+    for(size_t i = 0; i < sample_count; i++){
+        running_sum += input[i];
+        if(i >= window_size){
+            running_sum -= input[i - window_size];
+        }
+        size_t samples_used;
+        if(i + 1 < window_size){
+            samples_used = i + 1;
         }
         else{
-            start = 0;
+            samples_used = window_size;
         }
-
-        float sum = 0.0f;
-
-        for(size_t j = start; j <=i; j++){
-            sum+= input[j];
-        }
-
-        size_t samples_used = i - start + 1;
-
-        output[i] = sum / samples_used;
+        output[i] = running_sum / (float)samples_used;
     }
 }
 
@@ -190,12 +204,13 @@ float signal_rms(const float *samples, size_t sample_count){
     {
         return 0.0f;
     }
-    float sum_of_squares = 0.0f;
+    double sum_of_squares = 0.0;
     for(size_t i = 0; i < sample_count; i++){
-        sum_of_squares += samples[i] * samples[i];
+        double sample = samples[i];
+        sum_of_squares += sample * sample;
     }
 
-    float mean_square = sum_of_squares / (float)sample_count;
+    double mean_square = sum_of_squares / (double)sample_count;
 
-    return sqrtf(mean_square);
+    return (float)sqrtf(mean_square);
 }
