@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 
 const vitalsRoutes = require('./routes/vitals');
 const authRoutes = require('./routes/authRoutes');
+const deviceRoutes = require('./routes/deviceRoutes');
 
 // Create the Express application instance
 const app = express();
@@ -27,6 +28,7 @@ app.use(express.json());
 // API routes
 app.use('/api/v1/vitals', vitalsRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/devices', deviceRoutes);
 
 
 /*
