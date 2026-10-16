@@ -9,9 +9,9 @@ const vitalSchema = new mongoose.Schema(
     },
 
     patientId: {
-      type: String,
-      required: true,
-      trim: true
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
     },
 
     timestamp: {
