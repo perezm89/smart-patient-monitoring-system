@@ -1,8 +1,49 @@
 #include "json_formatter.h"
 
 #include <stdio.h>
+#include <time.h>
 
 #include "cJSON.h"
+
+esp_err_t json_get_timestamp(
+    char *timestamp_buffer,
+    size_t buffer_size
+)
+{
+    if(timestamp_buffer == NULL || buffer_size < 21)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    time_t now;
+    struct tm time_info;
+
+    time(&now);
+
+    if(now <= 0)
+    {
+        return ESP_FAIL;
+    }
+
+    if(gmtime_r(&now, &time_info) == NULL)
+    {
+        return ESP_FAIL;
+    }
+
+    size_t written = strftime(
+        timestamp_buffer,
+        buffer_size,
+        "%Y-%m-%dT%H:%M:%SZ",
+        &time_info
+    );
+
+    if(written == 0)
+    {
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
 
 esp_err_t json_format_sensor_data(
     char *json_buffer,
@@ -15,7 +56,10 @@ esp_err_t json_format_sensor_data(
     float skin_temperature_c
 )
 {
-    if(json_buffer == NULL)
+    if(json_buffer == NULL ||
+       device_id == NULL ||
+       patient_id == NULL ||
+       timestamp == NULL)
     {
         return ESP_ERR_INVALID_ARG;
     }
@@ -43,7 +87,7 @@ esp_err_t json_format_sensor_data(
         return ESP_ERR_NO_MEM;
     }
 
-    snprintf(
+    int written = snprintf(
         json_buffer,
         buffer_size,
         "%s",
@@ -52,6 +96,11 @@ esp_err_t json_format_sensor_data(
 
     cJSON_free(json_string);
     cJSON_Delete(root);
+
+    if(written < 0 || (size_t)written >= buffer_size)
+    {
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     return ESP_OK;
 }

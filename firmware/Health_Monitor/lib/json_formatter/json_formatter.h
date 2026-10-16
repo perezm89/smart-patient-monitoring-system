@@ -6,6 +6,11 @@
 
 #define JSON_BUFFER_SIZE 256
 
+esp_err_t json_get_timestamp(
+    char *timestamp_buffer,
+    size_t buffer_size
+);
+
 esp_err_t json_format_sensor_data(
     char *json_buffer,
     size_t buffer_size,
