@@ -3,20 +3,25 @@
  *
  * Description:
  * Main application entry point for the Smart Senior Monitoring System.
- * Initializes sensors, connects to Wi-Fi, synchronizes UTC time with SNTP,
- * acquires vital signs, formats them as JSON, prints the JSON payload, and
- * sends it to the backend.
+ * Initializes hardware peripherals, configures sensors, and continuously
+ * acquires physiological data for processing and transmission.
+ ******************************************************************************/
+
+/******************************************************************************
+ * Includes
  ******************************************************************************/
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
-#include <string.h>
+#include <time.h>
+#include <math.h>
 
-#include "esp_err.h"
-#include "esp_http_client.h"
+#include "esp_wifi.h"
 #include "esp_netif_sntp.h"
 
+#include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -28,201 +33,74 @@
 #include "heart_rate.h"
 #include "spo2.h"
 #include "json_formatter.h"
+#include "http_client.h"
+#include "device_config.h"
 
-/* PPG configuration */
+
+/******************************************************************************
+ * Configuration Constants
+ ******************************************************************************/
+
 #define PPG_SAMPLE_RATE_HZ           100.0f
-#define PPG_SAMPLE_COUNT             1000U
-#define PPG_MOVING_AVERAGE_WINDOW    7U
-#define PPG_COLLECTION_TIMEOUT_MS    15000U
+#define PPG_SAMPLE_COUNT             1000
+#define PPG_MOVING_AVERAGE_WINDOW    7
+#define PPG_COLLECTION_TIMEOUT_MS    15000
 
-/* Timing configuration */
-#define STARTUP_DELAY_MS             2000U
-#define SENSOR_STARTUP_DELAY_MS      1000U
-#define COLLECTION_RETRY_DELAY_MS    1000U
-#define MEASUREMENT_CYCLE_DELAY_MS   15000U
-#define SNTP_SYNC_TIMEOUT_MS         10000U
-#define HTTP_TIMEOUT_MS              5000
+#define SENSOR_STARTUP_DELAY_MS        1000U
+#define COLLECTION_RETRY_DELAY_MS      1000U
+#define MEASUREMENT_CYCLE_DELAY_MS     1000U
 
-/* Network and device configuration */
-#define WIFI_SSID      "FINDWAYH"
-#define WIFI_PASSWORD  "helpfulresort273"
+/******************************************************************************
+ * Static Buffers
+ ******************************************************************************/
 
-#define DEVICE_ID      "ESP32-C6-001"
-#define PATIENT_ID     "PATIENT-001"
-
-#define VITALS_API_URL \
-    "http://192.168.1.33:5000/api/v1/vitals"
-
-/*
- * Two raw buffers are required for simultaneous FIFO collection.
- * Processing buffers are reused for both optical channels.
- */
 static uint32_t red_raw_samples[PPG_SAMPLE_COUNT];
 static uint32_t ir_raw_samples[PPG_SAMPLE_COUNT];
 
-static float work_samples[PPG_SAMPLE_COUNT];
-static float ac_samples[PPG_SAMPLE_COUNT];
+static float red_float_samples[PPG_SAMPLE_COUNT];
+static float red_ac_samples[PPG_SAMPLE_COUNT];
 static float red_filtered_samples[PPG_SAMPLE_COUNT];
+
+static float ir_float_samples[PPG_SAMPLE_COUNT];
+static float ir_ac_samples[PPG_SAMPLE_COUNT];
 static float ir_filtered_samples[PPG_SAMPLE_COUNT];
 
-static esp_http_client_handle_t http_client = NULL;
+/******************************************************************************
+ * Application Entry Point
+ ******************************************************************************/
+
+#define DEVICE_ID "ESP32-C6-DEMO"
 
 /**
- * @brief Synchronize system time using SNTP.
- */
-static esp_err_t sync_system_time(void)
-{
-    const esp_sntp_config_t config =
-        ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-
-    esp_err_t ret = esp_netif_sntp_init(&config);
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "SNTP initialization failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        return ret;
-    }
-
-    ret = esp_netif_sntp_sync_wait(
-        pdMS_TO_TICKS(SNTP_SYNC_TIMEOUT_MS)
-    );
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "SNTP synchronization failed: %s\n",
-            esp_err_to_name(ret)
-        );
-    }
-
-    return ret;
-}
-
-/**
- * @brief Initialize one reusable HTTP client.
- */
-static esp_err_t http_client_init_once(void)
-{
-    const esp_http_client_config_t config = {
-        .url = VITALS_API_URL,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = HTTP_TIMEOUT_MS,
-        .keep_alive_enable = true
-    };
-
-    http_client = esp_http_client_init(&config);
-
-    if(http_client == NULL)
-    {
-        return ESP_FAIL;
-    }
-
-    return esp_http_client_set_header(
-        http_client,
-        "Content-Type",
-        "application/json"
-    );
-}
-
-/**
- * @brief Send one JSON payload to the backend.
- */
-static esp_err_t send_vitals_to_server(
-    const char *json_data
-)
-{
-    if((json_data == NULL) || (http_client == NULL))
-    {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t ret = esp_http_client_set_post_field(
-        http_client,
-        json_data,
-        strlen(json_data)
-    );
-
-    if(ret != ESP_OK)
-    {
-        return ret;
-    }
-
-    ret = esp_http_client_perform(http_client);
-
-    if(ret == ESP_OK)
-    {
-        int status_code =
-            esp_http_client_get_status_code(http_client);
-
-        printf(
-            "HTTP response: %d\n",
-            status_code
-        );
-    }
-    else
-    {
-        printf(
-            "HTTP POST failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        /*
-         * Close the failed connection so the next request starts
-         * with a new socket.
-         */
-        esp_http_client_close(http_client);
-    }
-
-    return ret;
-}
-
-/**
- * @brief Convert, remove DC, and filter one PPG channel.
+ * @brief Main application entry point.
  *
- * @return Mean DC level of the unfiltered channel.
+ * Initializes the shared I2C bus, MAX30102, and TMP117 sensors. Verifies
+ * communication with both sensors, starts continuous PPG measurements, and
+ * repeatedly acquires temperature and PPG data.
+ *
+ * The red and IR MAX30102 samples are used to estimate SpO2. The IR signal is
+ * also converted, DC-filtered, smoothed, and used to estimate heart rate.
  */
-static float process_ppg_channel(
-    const uint32_t *raw_samples,
-    float *filtered_output
-)
+void app_main(void)
 {
-    signal_convert_u32_to_float(
-        raw_samples,
-        work_samples,
-        PPG_SAMPLE_COUNT
-    );
+    esp_err_t ret;
 
-    const float dc_level = signal_mean(
-        work_samples,
-        PPG_SAMPLE_COUNT
-    );
+    /*
+     * Give the serial monitor time to reconnect after flashing or reset.
+     */
+    vTaskDelay(pdMS_TO_TICKS(2000));
 
-    signal_remove_dc(
-        work_samples,
-        ac_samples,
-        PPG_SAMPLE_COUNT
-    );
+    printf("\n");
+    printf("========================================\n");
+    printf(" Smart Senior Monitoring System\n");
+    printf("========================================\n");
+    printf("Application starting...\n");
 
-    signal_moving_average(
-        ac_samples,
-        filtered_output,
-        PPG_SAMPLE_COUNT,
-        PPG_MOVING_AVERAGE_WINDOW
-    );
+    /**************************************************************************
+     * I2C Initialization
+     **************************************************************************/
 
-    return dc_level;
-}
-
-/**
- * @brief Initialize the I2C interface and sensors.
- */
-static esp_err_t initialize_sensors(void)
-{
-    esp_err_t ret = i2c_interface_init();
+    ret = i2c_interface_init();
 
     if(ret != ESP_OK)
     {
@@ -231,8 +109,14 @@ static esp_err_t initialize_sensors(void)
             esp_err_to_name(ret)
         );
 
-        return ret;
+        return;
     }
+
+    printf("I2C interface initialized successfully.\n");
+
+    /**************************************************************************
+     * MAX30102 Initialization
+     **************************************************************************/
 
     ret = max30102_init();
 
@@ -243,10 +127,17 @@ static esp_err_t initialize_sensors(void)
             esp_err_to_name(ret)
         );
 
-        return ret;
+        return;
     }
 
-    uint8_t part_id = 0U;
+    printf("MAX30102 initialized successfully.\n");
+
+    /*
+     * Brief delay before attempting to read the device ID.
+     */
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    uint8_t part_id = 0;
 
     ret = max30102_read_part_id(&part_id);
 
@@ -257,17 +148,21 @@ static esp_err_t initialize_sensors(void)
             esp_err_to_name(ret)
         );
 
-        return ret;
+        return;
     }
+
+    printf("MAX30102 Part ID: 0x%02X\n", part_id);
 
     if(part_id != MAX30102_PART_ID)
     {
         printf(
-            "Invalid MAX30102 part ID: 0x%02X\n",
+            "Invalid MAX30102 Part ID: expected 0x%02X, "
+            "received 0x%02X\n",
+            MAX30102_PART_ID,
             part_id
         );
 
-        return ESP_ERR_NOT_FOUND;
+        return;
     }
 
     ret = max30102_start_measurement();
@@ -279,12 +174,20 @@ static esp_err_t initialize_sensors(void)
             esp_err_to_name(ret)
         );
 
-        return ret;
+        return;
     }
 
-    vTaskDelay(
-        pdMS_TO_TICKS(SENSOR_STARTUP_DELAY_MS)
-    );
+    printf("MAX30102 measurement started.\n");
+
+    /*
+     * Allow the optical signal and FIFO to stabilize before collecting the
+     * first full measurement window.
+     */
+    vTaskDelay(pdMS_TO_TICKS(SENSOR_STARTUP_DELAY_MS));
+
+    /**************************************************************************
+     * TMP117 Initialization
+     **************************************************************************/
 
     ret = tmp117_init();
 
@@ -294,70 +197,132 @@ static esp_err_t initialize_sensors(void)
             "TMP117 initialization failed: %s\n",
             esp_err_to_name(ret)
         );
-    }
 
-    return ret;
-}
-
-void app_main(void)
-{
-    vTaskDelay(
-        pdMS_TO_TICKS(STARTUP_DELAY_MS)
-    );
-
-    esp_err_t ret = initialize_sensors();
-
-    if(ret != ESP_OK)
-    {
         return;
     }
 
-    const bool wifi_connected =
-        (wifi_manager_connect(
-            WIFI_SSID,
-            WIFI_PASSWORD
-        ) == ESP_OK);
+    printf("TMP117 initialized successfully.\n");
 
-    bool upload_ready = false;
+    uint16_t device_id = 0;
 
-    if(!wifi_connected)
+    ret = tmp117_read_device_id(&device_id);
+
+    if(ret == ESP_OK)
     {
-        printf("Wi-Fi connection failed.\n");
+        printf("TMP117 Device ID register: 0x%04X\n", device_id);
     }
     else
     {
-        ret = sync_system_time();
+        printf(
+            "Failed to read TMP117 device ID: %s\n",
+            esp_err_to_name(ret)
+        );
+    }
 
-        if(ret == ESP_OK)
+    printf("Sensor initialization complete.\n");
+
+    /**************************************************************************
+     * Wi-Fi Connection
+     **************************************************************************/
+
+    ret = wifi_manager_connect(
+        WIFI_SSID,
+        WIFI_PASSWORD
+    );
+
+    if(ret != ESP_OK)
+    {
+        printf(
+            "Wi-Fi connection failed: %s\n",
+            esp_err_to_name(ret)
+        );
+
+        printf("Continuing in offline mode.\n");
+    }
+    else
+    {
+        printf("Wi-Fi connected successfully.\n");
+    }
+
+    const bool wifi_connected = (ret == ESP_OK);
+
+    if (wifi_connected)
+    {
+        esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        esp_err_t sntp_ret = esp_netif_sntp_init(&sntp_config);
+        if (sntp_ret != ESP_OK)
         {
-            ret = http_client_init_once();
-
-            if(ret == ESP_OK)
-            {
-                upload_ready = true;
-            }
-            else
-            {
-                printf(
-                    "HTTP client initialization failed: %s\n",
-                    esp_err_to_name(ret)
-                );
-            }
+            printf("SNTP initialization failed: %s\n", esp_err_to_name(sntp_ret));
         }
     }
 
+    printf("Beginning measurement loop...\n\n");
+
+    /**************************************************************************
+     * Main Measurement Loop
+     **************************************************************************/
+
     while(1)
     {
+        int16_t raw_temperature = 0;
         float temperature_c = 0.0f;
+        bool temperature_valid = false;
+
+        /**********************************************************************
+         * TMP117 Temperature Measurement
+         **********************************************************************/
+
+        ret = tmp117_read_raw_temperature(
+            &raw_temperature
+        );
+
+        if(ret == ESP_OK)
+        {
+            printf(
+                "Raw temperature: %d\n",
+                raw_temperature
+            );
+        }
+        else
+        {
+            printf(
+                "Raw temperature read failed: %s\n",
+                esp_err_to_name(ret)
+            );
+        }
 
         ret = tmp117_read_temperature(
             &temperature_c
         );
 
-        if(ret != ESP_OK)
+        if(ret == ESP_OK)
         {
-            temperature_c = 0.0f;
+            temperature_valid = true;
+            float temperature_f =
+                (temperature_c * 9.0f / 5.0f) + 32.0f;
+
+            printf(
+                "Temperature: %.3f C | %.2f F\n",
+                temperature_c,
+                temperature_f
+            );
         }
+        else
+        {
+            printf(
+                "Temperature read failed: %s\n",
+                esp_err_to_name(ret)
+            );
+        }
+
+        /**********************************************************************
+         * MAX30102 Sample Collection
+         **********************************************************************/
+
+        printf(
+            "Collecting %u PPG samples...\n",
+            (unsigned int)PPG_SAMPLE_COUNT
+        );
 
         ret = max30102_collect_samples(
             red_raw_samples,
@@ -369,112 +334,293 @@ void app_main(void)
         if(ret != ESP_OK)
         {
             printf(
-                "PPG collection failed: %s\n",
-                esp_err_to_name(ret)
+               "PPG sample collection failed: %s\n",
+               esp_err_to_name(ret)
             );
 
             vTaskDelay(
-                pdMS_TO_TICKS(
-                    COLLECTION_RETRY_DELAY_MS
-                )
+                pdMS_TO_TICKS(1000)
             );
 
             continue;
         }
 
-        const float red_dc = process_ppg_channel(
+        /*
+         * Remove this printf if max30102_collect_samples() already prints
+         * the same success message.
+         */
+        printf(
+            "Collected %u PPG samples successfully.\n",
+            (unsigned int)PPG_SAMPLE_COUNT
+        );
+
+        /**********************************************************************
+         * Convert Raw PPG Samples
+         **********************************************************************/
+
+        signal_convert_u32_to_float(
             red_raw_samples,
-            red_filtered_samples
+            red_float_samples,
+            PPG_SAMPLE_COUNT
         );
 
-        const float ir_dc = process_ppg_channel(
+        signal_convert_u32_to_float(
             ir_raw_samples,
-            ir_filtered_samples
+            ir_float_samples,
+            PPG_SAMPLE_COUNT
         );
 
-        spo2_result_t spo2_result = {0};
+        /**********************************************************************
+         * Calculate Raw DC Levels
+         **********************************************************************/
 
-        const esp_err_t spo2_ret =
-            spo2_calculate(
-                red_filtered_samples,
-                ir_filtered_samples,
-                PPG_SAMPLE_COUNT,
-                red_dc,
-                ir_dc,
-                &spo2_result
+        float red_dc = signal_mean(
+            red_float_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float ir_dc = signal_mean(
+            ir_float_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        /**********************************************************************
+         * Remove DC Components
+         **********************************************************************/
+
+        signal_remove_dc(
+            red_float_samples,
+            red_ac_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        signal_remove_dc(
+            ir_float_samples,
+            ir_ac_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        /**********************************************************************
+         * Apply Identical Filtering
+         **********************************************************************/
+
+        signal_moving_average(
+            red_ac_samples,
+            red_filtered_samples,
+            PPG_SAMPLE_COUNT,
+            PPG_MOVING_AVERAGE_WINDOW
+        );
+
+        signal_moving_average(
+            ir_ac_samples,
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT,
+            PPG_MOVING_AVERAGE_WINDOW
+        );
+
+        /**********************************************************************
+         * Signal Diagnostics
+         **********************************************************************/
+
+        float red_min = signal_min(
+            red_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float red_max = signal_max(
+            red_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float red_peak_to_peak = signal_peak_to_peak(
+            red_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float red_rms = signal_rms(
+            red_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float ir_min = signal_min(
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float ir_max = signal_max(
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float ir_peak_to_peak = signal_peak_to_peak(
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        float ir_rms = signal_rms(
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT
+        );
+
+        printf(
+            "Red signal: min=%.2f, max=%.2f, "
+            "p-p=%.2f, RMS=%.2f, DC=%.2f\n",
+            red_min,
+            red_max,
+            red_peak_to_peak,
+            red_rms,
+            red_dc
+        );
+
+        printf(
+            "IR signal: min=%.2f, max=%.2f, "
+            "p-p=%.2f, RMS=%.2f, DC=%.2f\n",
+            ir_min,
+            ir_max,
+            ir_peak_to_peak,
+            ir_rms,
+            ir_dc
+        );
+
+        /**********************************************************************
+         * SpO2 Calculation
+         **********************************************************************/
+
+        spo2_result_t spo2_result;
+
+        esp_err_t spo2_ret = spo2_calculate(
+            red_filtered_samples,
+            ir_filtered_samples,
+            PPG_SAMPLE_COUNT,
+            red_dc,
+            ir_dc,
+            &spo2_result
+        );
+
+        if(spo2_ret == ESP_OK)
+        {
+            printf(
+                "SpO2: %.1f %% | "
+                "Raw SpO2=%.2f %% | "
+                "R=%.3f | "
+                "Red AC RMS=%.2f | "
+                "IR AC RMS=%.2f\n",
+                spo2_result.spo2_percent,
+                spo2_result.raw_spo2_percent,
+                spo2_result.ratio,
+                spo2_result.red_ac_rms,
+                spo2_result.ir_ac_rms
             );
+        }
+        else
+        {
+            printf(
+                "SpO2 could not be calculated: %s. "
+                "Keep the sensor steady and maintain "
+                "consistent contact.\n",
+                esp_err_to_name(spo2_ret)
+            );
+        }
 
-        const float bpm = heart_rate_process(
+        /**********************************************************************
+         * Heart-Rate Calculation
+         **********************************************************************/
+
+        float bpm = heart_rate_process(
             ir_filtered_samples,
             PPG_SAMPLE_COUNT,
             PPG_SAMPLE_RATE_HZ
         );
 
-        const int heart_rate_bpm =
-            (bpm > 0.0f) ?
-            (int)bpm :
-            0;
-
-        const int spo2_percent =
-            (spo2_ret == ESP_OK) ?
-            (int)spo2_result.spo2_percent :
-            0;
-
-        if(upload_ready)
+        if(bpm > 0.0f)
         {
-            char timestamp[32];
-            char json_buffer[JSON_BUFFER_SIZE];
-
-            ret = json_get_timestamp(
-                timestamp,
-                sizeof(timestamp)
+            printf(
+                "Heart rate: %.1f BPM\n",
+                bpm
             );
+        }
+        else
+       {
+            printf(
+                "Heart rate could not be calculated. "
+                "Keep the sensor steady and maintain contact.\n"
+            );
+        }
 
-            if(ret != ESP_OK)
+        // Do not serialize invalid or uninitialized sensor results.
+        if (!temperature_valid || !isfinite(temperature_c) ||
+            !isfinite(bpm) || bpm <= 0.0f ||
+            spo2_ret != ESP_OK || !isfinite(spo2_result.spo2_percent) ||
+            spo2_result.spo2_percent <= 0.0f ||
+            spo2_result.spo2_percent > 100.0f)
+        {
+            printf("Upload skipped: one or more sensor measurements are invalid.\n");
+        }
+        else if (!wifi_connected)
+        {
+            printf("Upload skipped: Wi-Fi was unavailable at startup.\n");
+        }
+        else
+        {
+            wifi_ap_record_t ap_info;
+            if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK)
             {
-                printf(
-                    "Timestamp generation failed: %s\n",
-                    esp_err_to_name(ret)
-                );
+                printf("Upload skipped: Wi-Fi is currently disconnected.\n");
             }
             else
             {
-                ret = json_format_sensor_data(
-                    json_buffer,
-                    sizeof(json_buffer),
-                    DEVICE_ID,
-                    PATIENT_ID,
-                    timestamp,
-                    heart_rate_bpm,
-                    spo2_percent,
-                    temperature_c
-                );
+                time_t now = time(NULL);
+                struct tm utc_time;
+                char timestamp[32];
 
-                if(ret != ESP_OK)
+                // Reject an unsynchronized clock rather than storing a fake time.
+                if (now < 1704067200 ||
+                    gmtime_r(&now, &utc_time) == NULL ||
+                    strftime(timestamp, sizeof(timestamp),
+                             "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0)
                 {
-                    printf(
-                        "JSON formatting failed: %s\n",
-                        esp_err_to_name(ret)
-                    );
+                    printf("Upload skipped: waiting for valid UTC time from SNTP.\n");
                 }
                 else
                 {
-                    printf(
-                        "JSON payload:\n%s\n",
-                        json_buffer
+                    char json_buffer[JSON_BUFFER_SIZE];
+                    esp_err_t json_ret = json_format_sensor_data(
+                        json_buffer,
+                        sizeof(json_buffer),
+                        DEVICE_ID,
+                        timestamp,
+                        (int)bpm,
+                        (int)spo2_result.spo2_percent,
+                        temperature_c
                     );
 
-                    send_vitals_to_server(
-                        json_buffer
-                    );
+                    if (json_ret != ESP_OK)
+                    {
+                        printf("JSON formatting failed: %s\n",
+                               esp_err_to_name(json_ret));
+                    }
+                    else
+                    {
+                        printf("Prepared JSON: %s\n", json_buffer);
+                        esp_err_t http_ret = http_client_send_vitals(
+                            BACKEND_URL,
+                            DEVICE_API_KEY,
+                            json_buffer
+                        );
+                        printf(http_ret == ESP_OK ?
+                               "Vitals successfully uploaded.\n" :
+                               "Vitals upload failed.\n");
+                    }
                 }
             }
         }
 
+        printf(
+            "----------------------------------------\n"
+        );
+
         vTaskDelay(
-            pdMS_TO_TICKS(
-                MEASUREMENT_CYCLE_DELAY_MS
-            )
+            pdMS_TO_TICKS(1000)
         );
     }
 }
