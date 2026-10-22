@@ -25,3 +25,7 @@ Thumbs.db
 
 # PlatformIO
 .pio/
+
+# ESP32 local configuration
+# Contains Wi-Fi credentials, backend URL, and device API key
+firmware/Health_Monitor/src/device_config.h

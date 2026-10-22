@@ -14,6 +14,12 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include <time.h>
+#include <math.h>
+
+#include "esp_wifi.h"
+#include "esp_netif_sntp.h"
 
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -27,6 +33,8 @@
 #include "heart_rate.h"
 #include "spo2.h"
 #include "json_formatter.h"
+#include "http_client.h"
+#include "device_config.h"
 
 
 /******************************************************************************
@@ -61,10 +69,7 @@ static float ir_filtered_samples[PPG_SAMPLE_COUNT];
  * Application Entry Point
  ******************************************************************************/
 
-#define WIFI_SSID      "wifi name goes here"
-#define WIFI_PASSWORD  "password goes here"
-#define DEVICE_ID   "ESP32-C6-001"
-#define PATIENT_ID  "PATIENT-001"
+#define DEVICE_ID "ESP32-C6-DEMO"
 
 /**
  * @brief Main application entry point.
@@ -239,6 +244,18 @@ void app_main(void)
         printf("Wi-Fi connected successfully.\n");
     }
 
+    const bool wifi_connected = (ret == ESP_OK);
+
+    if (wifi_connected)
+    {
+        esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+        esp_err_t sntp_ret = esp_netif_sntp_init(&sntp_config);
+        if (sntp_ret != ESP_OK)
+        {
+            printf("SNTP initialization failed: %s\n", esp_err_to_name(sntp_ret));
+        }
+    }
+
     printf("Beginning measurement loop...\n\n");
 
     /**************************************************************************
@@ -249,6 +266,7 @@ void app_main(void)
     {
         int16_t raw_temperature = 0;
         float temperature_c = 0.0f;
+        bool temperature_valid = false;
 
         /**********************************************************************
          * TMP117 Temperature Measurement
@@ -279,6 +297,7 @@ void app_main(void)
 
         if(ret == ESP_OK)
         {
+            temperature_valid = true;
             float temperature_f =
                 (temperature_c * 9.0f / 5.0f) + 32.0f;
 
@@ -528,22 +547,72 @@ void app_main(void)
             );
         }
 
-        char json_buffer[JSON_BUFFER_SIZE];
-
-        ret = json_format_sensor_data(
-            json_buffer,
-            sizeof(json_buffer),
-            DEVICE_ID,
-            PATIENT_ID,
-            "2026-07-12T22:00:00Z",
-            (int)bpm,
-            (int)spo2_result.spo2_percent,
-            temperature_c
-        );
-
-        if(ret == ESP_OK)
+        // Do not serialize invalid or uninitialized sensor results.
+        if (!temperature_valid || !isfinite(temperature_c) ||
+            !isfinite(bpm) || bpm <= 0.0f ||
+            spo2_ret != ESP_OK || !isfinite(spo2_result.spo2_percent) ||
+            spo2_result.spo2_percent <= 0.0f ||
+            spo2_result.spo2_percent > 100.0f)
         {
-            printf("%s\n", json_buffer);
+            printf("Upload skipped: one or more sensor measurements are invalid.\n");
+        }
+        else if (!wifi_connected)
+        {
+            printf("Upload skipped: Wi-Fi was unavailable at startup.\n");
+        }
+        else
+        {
+            wifi_ap_record_t ap_info;
+            if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK)
+            {
+                printf("Upload skipped: Wi-Fi is currently disconnected.\n");
+            }
+            else
+            {
+                time_t now = time(NULL);
+                struct tm utc_time;
+                char timestamp[32];
+
+                // Reject an unsynchronized clock rather than storing a fake time.
+                if (now < 1704067200 ||
+                    gmtime_r(&now, &utc_time) == NULL ||
+                    strftime(timestamp, sizeof(timestamp),
+                             "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0)
+                {
+                    printf("Upload skipped: waiting for valid UTC time from SNTP.\n");
+                }
+                else
+                {
+                    char json_buffer[JSON_BUFFER_SIZE];
+                    esp_err_t json_ret = json_format_sensor_data(
+                        json_buffer,
+                        sizeof(json_buffer),
+                        DEVICE_ID,
+                        timestamp,
+                        (int)bpm,
+                        (int)spo2_result.spo2_percent,
+                        temperature_c
+                    );
+
+                    if (json_ret != ESP_OK)
+                    {
+                        printf("JSON formatting failed: %s\n",
+                               esp_err_to_name(json_ret));
+                    }
+                    else
+                    {
+                        printf("Prepared JSON: %s\n", json_buffer);
+                        esp_err_t http_ret = http_client_send_vitals(
+                            BACKEND_URL,
+                            DEVICE_API_KEY,
+                            json_buffer
+                        );
+                        printf(http_ret == ESP_OK ?
+                               "Vitals successfully uploaded.\n" :
+                               "Vitals upload failed.\n");
+                    }
+                }
+            }
         }
 
         printf(

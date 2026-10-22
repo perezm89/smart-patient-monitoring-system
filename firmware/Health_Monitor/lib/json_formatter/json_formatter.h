@@ -10,7 +10,6 @@ esp_err_t json_format_sensor_data(
     char *json_buffer,
     size_t buffer_size,
     const char *device_id,
-    const char *patient_id,
     const char *timestamp,
     int heart_rate_bpm,
     int spo2_percent,

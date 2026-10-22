@@ -1,0 +1,9 @@
+
+{
+  "name": "MAX30102_LibDriver",
+  "version": "1.0.0",
+  "build": {
+    "srcDir": "src",
+    "includeDir": "src"
+  }
+}
