@@ -7,8 +7,12 @@ import {
 } from 'react-router-dom';
 
 import { useEffect, useState } from 'react';
+
+// Axios client for communicating with our Express backend.
+// Automatically attaches the JWT from sessionStorage.
 import api from './services/api';
 
+// Dashboard components
 import Sidebar from './components/Sidebar';
 import VitalCard from './components/VitalCard';
 import VitalsChart from './components/VitalsChart';
@@ -16,71 +20,222 @@ import LoginPage from './pages/LoginPage';
 
 import './App.css';
 
+// Polling interval: request updated measurements every 5 seconds.
+const POLLING_INTERVAL_MS = 5000;
+
+// PATIENT DASHBOARD
 function Dashboard() {
+
+  // Most recent measurement for the vital-sign cards.
   const [latestVitals, setLatestVitals] = useState(null);
+
+  // Historical measurements for the Recharts graph.
+  const [vitalsHistory, setVitalsHistory] = useState([]);
+
+  // Track the initial API request and any errors.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // FETCH PATIENT VITALS + AUTOMATIC POLLING
   useEffect(() => {
-    const fetchVitals = async () => {
-      try {
-        const response = await api.get('/api/v1/patients/me/vitals');
 
+    // Track whether this effect is still active.
+    // Prevents state updates after unmounting.
+    let isMounted = true;
+
+    // Prevent overlapping requests if the backend is slow.
+    let isFetching = false;
+
+    const fetchVitals = async () => {
+
+      // Skip if a previous request is still running.
+      if (isFetching) return;
+
+      isFetching = true;
+
+      try {
+
+        // GET request to our protected Express endpoint.
+        // The Axios interceptor automatically includes the JWT.
+        const response = await api.get(
+          '/api/v1/patients/me/vitals'
+        );
+
+        // Expected response:
+        // {
+        //   success: true,
+        //   data: [ ...vital records ]
+        // }
         const vitals = response.data.data;
 
-        if (Array.isArray(vitals) && vitals.length > 0) {
-          setLatestVitals(vitals[0]);
+        // Ignore results if this effect has been cleaned up.
+        if (!isMounted) return;
+
+        // Validate that the backend returned an array.
+        if (!Array.isArray(vitals)) {
+          throw new Error('Invalid vitals response');
+        }
+
+        if (vitals.length > 0) {
+
+          // Sort records chronologically, oldest to newest.
+          // Copy the array to avoid modifying the response.
+          const sortedVitals = [...vitals].sort(
+            (a, b) =>
+              new Date(a.timestamp) - new Date(b.timestamp)
+          );
+
+          // Update the historical chart.
+          setVitalsHistory(sortedVitals);
+
+          // Update cards with the newest measurement.
+          setLatestVitals(
+            sortedVitals[sortedVitals.length - 1]
+          );
+
         } else {
+
+          // No measurements stored for this patient.
+          setVitalsHistory([]);
           setLatestVitals(null);
         }
 
+        // Clear any previous API errors.
         setError('');
+
       } catch (err) {
+
         console.error('Failed to fetch vitals:', err);
-        setError('Unable to load patient vitals');
+
+        if (isMounted) {
+          setError('Unable to refresh patient vitals');
+        }
+
       } finally {
-        setLoading(false);
+
+        // Allow the next polling request.
+        isFetching = false;
+
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
+
+    // Request measurements immediately on dashboard load.
     fetchVitals();
+
+    // Repeat the request every 5 seconds.
+    // New MongoDB records will appear automatically.
+    const intervalId = setInterval(
+      fetchVitals,
+      POLLING_INTERVAL_MS
+    );
+
+
+    // Cleanup when the dashboard unmounts.
+    // Also handles React Strict Mode effect cleanup.
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+
   }, []);
 
+  // DASHBOARD UI
   return (
     <div className="dashboard-layout">
+
+      {/* Left navigation sidebar */}
       <Sidebar />
 
       <main className="dashboard-main">
+
+        {/* Dashboard heading and measurement timestamp */}
         <header className="dashboard-header">
+
           <h1>Patient Dashboard</h1>
-          <p>Real-time patient vitals and device status</p>
+
+          <p>Recorded patient vitals and device status</p>
+
+          {/* Timestamp of the latest stored measurement.
+              This is NOT the time of the latest API request. */}
+          {latestVitals?.timestamp && (
+            <p>
+              Last measurement:{' '}
+              {new Date(
+                latestVitals.timestamp
+              ).toLocaleString()}
+            </p>
+          )}
+
         </header>
 
+
+        {/* API loading and error messages */}
+        {loading && (
+          <p>Loading patient vitals...</p>
+        )}
+
+        {error && (
+          <p role="alert">{error}</p>
+        )}
+
+
+        {/*VITAL-SIGN SUMMARY CARDS*/}
+
         <section className="vitals-grid">
+
+          {/* Heart Rate */}
           <VitalCard
             title="Heart Rate"
             value={latestVitals?.heartRateBpm ?? '--'}
             unit="BPM"
             icon="❤️"
-            status="Awaiting sensor data"
+            status={
+              latestVitals?.heartRateBpm != null
+                ? 'Recorded reading available'
+                : 'Awaiting sensor data'
+            }
           />
 
+
+          {/* Blood Oxygen Saturation */}
           <VitalCard
             title="SpO₂"
             value={latestVitals?.spo2Percent ?? '--'}
             unit="%"
             icon="🫁"
-            status="Awaiting sensor data"
+            status={
+              latestVitals?.spo2Percent != null
+                ? 'Recorded reading available'
+                : 'Awaiting sensor data'
+            }
           />
 
+
+          {/* Skin Temperature */}
           <VitalCard
             title="Skin Temperature"
-            value={latestVitals?.skinTemperatureC?.toFixed(2) ?? '--'}
+            value={
+              latestVitals?.skinTemperatureC != null
+                ? Number(
+                    latestVitals.skinTemperatureC
+                  ).toFixed(2)
+                : '--'
+            }
             unit="°C"
             icon="🌡️"
-            status="Awaiting sensor data"
+            status={
+              latestVitals?.skinTemperatureC != null
+                ? 'Recorded reading available'
+                : 'Awaiting sensor data'
+            }
           />
 
+
+          {/* Fall detection is not yet connected to API */}
           <VitalCard
             title="Fall Detection"
             value="--"
@@ -88,15 +243,27 @@ function Dashboard() {
             icon="🏃"
             status="Not connected"
           />
+
         </section>
 
-        <VitalsChart />
+
+        {/* HISTORICAL VITAL-SIGN CHART*/}
+
+        {/* Pass the measurements retrieved from MongoDB.
+            The chart automatically re-renders whenever
+            polling updates vitalsHistory. */}
+        <VitalsChart vitals={vitalsHistory} />
+
       </main>
     </div>
   );
 }
 
+// PROTECTED ROUTE
+// Redirect users without a stored JWT to the login page.
+// The backend independently validates the JWT on requests.
 function ProtectedRoute({ children }) {
+
   const token = sessionStorage.getItem('accessToken');
 
   if (!token) {
@@ -106,20 +273,31 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+// APPLICATION ROUTING
 function App() {
+
   return (
     <BrowserRouter>
+
       <Routes>
+
+        {/* Default route */}
         <Route
           path="/"
-          element={<Navigate to="/dashboard" replace />}
+          element={
+            <Navigate to="/dashboard" replace />
+          }
         />
 
+
+        {/* Public login page */}
         <Route
           path="/login"
           element={<LoginPage />}
         />
 
+
+        {/* Protected patient dashboard */}
         <Route
           path="/dashboard"
           element={
@@ -129,11 +307,18 @@ function App() {
           }
         />
 
+
+        {/* Temporary redirect until the
+            dedicated Vitals page is implemented */}
         <Route
           path="/vitals"
-          element={<Navigate to="/dashboard" replace />}
+          element={
+            <Navigate to="/dashboard" replace />
+          }
         />
+
       </Routes>
+
     </BrowserRouter>
   );
 }
