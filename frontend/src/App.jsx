@@ -17,6 +17,7 @@ import Sidebar from './components/Sidebar';
 import VitalCard from './components/VitalCard';
 import VitalsChart from './components/VitalsChart';
 import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
 
 import './App.css';
 
@@ -294,6 +295,12 @@ function App() {
         <Route
           path="/login"
           element={<LoginPage />}
+        />
+
+        {/* Public signup page */}
+        <Route
+          path="/signup"
+          element={<SignupPage />}
         />
 
 

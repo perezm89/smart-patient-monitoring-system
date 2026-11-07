@@ -284,3 +284,44 @@
   color: #fb7185;
   text-align: left;
 }
+
+/* Success message displayed after account registration */
+.signup-success {
+  color: #a3e635;
+  background-color: rgba(163, 230, 53, 0.1);
+  border: 1px solid rgba(163, 230, 53, 0.35);
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* Match the Signup dropdown to the existing dark inputs */
+.login-form select {
+  width: 100%;
+  padding: 12px;
+  background-color: #0d1219;
+  color: #ffffff;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+/* Highlight the dropdown when selected */
+.login-form select:focus {
+  outline: 2px solid #91d000;
+  outline-offset: 1px;
+}
+
+/* Match Login and Signup links to the SPMS green theme */
+.login-form a,
+.login-form a:visited {
+  color: #a3e635;
+  text-decoration: none;
+}
+
+.login-form a:hover {
+  text-decoration: underline;
+}
