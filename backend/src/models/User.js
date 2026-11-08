@@ -31,7 +31,14 @@ const userSchema = new mongoose.Schema(
       type: String,
       enum: ['patient', 'caregiver'],
       required: true
-    }
+    },
+
+    assignedPatients: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      }
+    ]
   },
   {
     timestamps: true
