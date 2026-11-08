@@ -33,17 +33,30 @@ function Login() {
 
       const { token, user } = response.data;
 
+      // Validate authentication response.
       if (!token) {
         throw new Error('No authentication token returned');
+      }
+
+      if (!['patient', 'caregiver'].includes(user?.role)) {
+        throw new Error('Invalid user role returned');
       }
 
       // Store the JWT for authenticated API requests.
       sessionStorage.setItem('accessToken', token);
 
-      console.log('Login successful:', user?.role);
+      // Store the user's role for frontend routing.
+      // Backend authorization still validates the JWT.
+      sessionStorage.setItem('userRole', user.role);
 
-      // Navigate to the existing patient dashboard.
-      navigate('/dashboard', { replace: true });
+      console.log('Login successful:', user.role);
+
+      // Redirect based on the authenticated user's role.
+      if (user.role === 'caregiver') {
+        navigate('/caregiver/dashboard', { replace: true });
+      } else {
+        navigate('/dashboard', { replace: true });
+      }
 
     } catch (err) {
       setError(

@@ -16,6 +16,9 @@ import api from './services/api';
 import Sidebar from './components/Sidebar';
 import VitalCard from './components/VitalCard';
 import VitalsChart from './components/VitalsChart';
+import CaregiverDashboard from './components/CaregiverDashboard';
+
+// Authentication pages
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 
@@ -36,6 +39,7 @@ function Dashboard() {
   // Track the initial API request and any errors.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
 
   // FETCH PATIENT VITALS + AUTOMATIC POLLING
   useEffect(() => {
@@ -144,7 +148,8 @@ function Dashboard() {
 
   }, []);
 
-  // DASHBOARD UI
+
+  // PATIENT DASHBOARD UI
   return (
     <div className="dashboard-layout">
 
@@ -184,7 +189,7 @@ function Dashboard() {
         )}
 
 
-        {/*VITAL-SIGN SUMMARY CARDS*/}
+        {/* VITAL-SIGN SUMMARY CARDS */}
 
         <section className="vitals-grid">
 
@@ -248,7 +253,7 @@ function Dashboard() {
         </section>
 
 
-        {/* HISTORICAL VITAL-SIGN CHART*/}
+        {/* HISTORICAL VITAL-SIGN CHART */}
 
         {/* Pass the measurements retrieved from MongoDB.
             The chart automatically re-renders whenever
@@ -260,15 +265,41 @@ function Dashboard() {
   );
 }
 
-// PROTECTED ROUTE
-// Redirect users without a stored JWT to the login page.
-// The backend independently validates the JWT on requests.
-function ProtectedRoute({ children }) {
+// ROLE-PROTECTED ROUTE
+// Checks whether the user has a JWT and the required role.
+// These checks control frontend navigation only.
+// The Express backend independently validates JWTs and
+// enforces authorization before returning patient data.
+
+function ProtectedRoute({ children, requiredRole }) {
 
   const token = sessionStorage.getItem('accessToken');
+  const userRole = sessionStorage.getItem('userRole');
 
+  // No token: redirect to login.
   if (!token) {
     return <Navigate to="/login" replace />;
+  }
+
+  // Missing or unrecognized role: require a fresh login.
+  if (!['patient', 'caregiver'].includes(userRole)) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Wrong role: redirect to the appropriate dashboard.
+  if (requiredRole && userRole !== requiredRole) {
+
+    const correctDashboard =
+      userRole === 'caregiver'
+        ? '/caregiver/dashboard'
+        : '/dashboard';
+
+    return (
+      <Navigate
+        to={correctDashboard}
+        replace
+      />
+    );
   }
 
   return children;
@@ -276,6 +307,15 @@ function ProtectedRoute({ children }) {
 
 // APPLICATION ROUTING
 function App() {
+
+  // Read the role stored during login.
+  const userRole = sessionStorage.getItem('userRole');
+
+  // Determine the appropriate dashboard for the user.
+  const defaultDashboard =
+    userRole === 'caregiver'
+      ? '/caregiver/dashboard'
+      : '/dashboard';
 
   return (
     <BrowserRouter>
@@ -286,7 +326,7 @@ function App() {
         <Route
           path="/"
           element={
-            <Navigate to="/dashboard" replace />
+            <Navigate to={defaultDashboard} replace />
           }
         />
 
@@ -296,6 +336,7 @@ function App() {
           path="/login"
           element={<LoginPage />}
         />
+
 
         {/* Public signup page */}
         <Route
@@ -308,19 +349,31 @@ function App() {
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requiredRole="patient">
               <Dashboard />
             </ProtectedRoute>
           }
         />
 
 
-        {/* Temporary redirect until the
-            dedicated Vitals page is implemented */}
+        {/* Protected caregiver dashboard */}
+        <Route
+          path="/caregiver/dashboard"
+          element={
+            <ProtectedRoute requiredRole="caregiver">
+              <CaregiverDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+
+        {/*Redirect to the appropriate dashboard.
+          Both patient and caregiver dashboards already
+          display vital measurements and historical charts. */}
         <Route
           path="/vitals"
           element={
-            <Navigate to="/dashboard" replace />
+            <Navigate to={defaultDashboard} replace />
           }
         />
 
