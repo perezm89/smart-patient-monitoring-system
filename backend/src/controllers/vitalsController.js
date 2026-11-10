@@ -1,4 +1,5 @@
 const Vital = require('../models/Vital');
+const Alert = require('../models/Alert');
 
 const createVital = async (req, res) => {
     try {
@@ -6,7 +7,8 @@ const createVital = async (req, res) => {
             timestamp,
             heartRateBpm,
             spo2Percent,
-            skinTemperatureC
+            skinTemperatureC,
+            fallDetected
         } = req.body;
 
         const device = req.device;
@@ -24,10 +26,27 @@ const createVital = async (req, res) => {
             timestamp,
             heartRateBpm,
             spo2Percent,
-            skinTemperatureC
+            skinTemperatureC,
+            fallDetected
         });
 
         const savedVital = await vital.save();
+
+        if (savedVital.fallDetected === true) {
+            const alert = new Alert({
+                patientId: savedVital.patientId,
+                deviceId: savedVital.deviceId,
+                vitalId: savedVital._id,
+                type: 'fall',
+                timestamp: savedVital.timestamp
+            });
+
+            await alert.save();
+
+            console.log(
+                `Fall alert created for patient ${savedVital.patientId}`
+            );
+        }
 
         return res.status(201).json({
             success: true,

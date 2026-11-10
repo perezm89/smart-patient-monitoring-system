@@ -32,9 +32,14 @@ const vitalSchema = new mongoose.Schema(
       max: 100
     },
 
-    skinTemperatureC: {
+   skinTemperatureC: {
       type: Number,
       required: true
+    },
+
+    fallDetected: {
+      type: Boolean,
+      default: false
     }
   },
   {
