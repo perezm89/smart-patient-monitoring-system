@@ -1,6 +1,20 @@
-function VitalCard({ title, value, unit, icon, status }) {
+
+function VitalCard({
+  title,
+  value,
+  unit,
+  icon,
+  status,
+  variant = "normal",
+}) {
+  // Apply warning styling only when requested.
+  const cardClassName =
+    variant === "danger"
+      ? "vital-card vital-card-danger"
+      : "vital-card";
+
   return (
-    <div className="vital-card">
+    <div className={cardClassName}>
       <div className="vital-card-header">
         <span className="vital-icon">{icon}</span>
         <span className="vital-title">{title}</span>

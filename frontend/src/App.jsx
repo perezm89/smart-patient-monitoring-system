@@ -241,14 +241,33 @@ function Dashboard() {
           />
 
 
-          {/* Fall detection is not yet connected to API */}
+          
+          {/* Display fall detection from the latest patient reading */}
           <VitalCard
             title="Fall Detection"
-            value="--"
+            value={
+              latestVitals?.fallDetected === true
+                ? "Fall Detected"
+                : latestVitals?.fallDetected === false
+                  ? "No Fall"
+                  : "--"
+            }
             unit=""
             icon="🏃"
-            status="Not connected"
+            status={
+              latestVitals?.fallDetected === true
+                ? "Fall event recorded - attention required"
+                : latestVitals?.fallDetected === false
+                  ? "No fall in latest reading"
+                  : "Awaiting sensor data"
+            }
+            variant={
+              latestVitals?.fallDetected === true
+                ? "danger"
+                : "normal"
+            }
           />
+
 
         </section>
 

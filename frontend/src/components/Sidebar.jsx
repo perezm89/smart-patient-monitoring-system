@@ -49,10 +49,6 @@ function Sidebar() {
           Dashboard
         </NavLink>
 
-        <NavLink to="/vitals">
-          Vitals
-        </NavLink>
-
         <NavLink to="/alerts">
           Alerts
         </NavLink>
