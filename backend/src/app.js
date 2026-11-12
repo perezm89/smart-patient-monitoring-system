@@ -12,6 +12,7 @@ const authRoutes = require('./routes/authRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
 const patientsRoutes = require('./routes/patientsRoutes');
 const caregiverRoutes = require('./routes/caregiverRoutes');
+const alertRoutes = require('./routes/alertRoutes');
 
 // Create the Express application instance
 const app = express();
@@ -39,6 +40,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/devices', deviceRoutes);
 app.use('/api/v1/patients', patientsRoutes);
 app.use('/api/v1/caregivers', caregiverRoutes);
+app.use('/api/v1/alerts', alertRoutes);
 
 /*
   Used to verify that the backend server is running correctly.
