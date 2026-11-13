@@ -21,6 +21,7 @@ import CaregiverDashboard from './components/CaregiverDashboard';
 // Authentication pages
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import AlertsPage from './pages/AlertsPage';
 
 import './App.css';
 
@@ -384,7 +385,16 @@ function App() {
             </ProtectedRoute>
           }
         />
-
+        
+        {/* Protected alerts page for patients and caregivers */}
+        <Route
+          path="/alerts"
+          element={
+            <ProtectedRoute>
+              <AlertsPage />
+            </ProtectedRoute>
+          }
+        />
 
         {/*Redirect to the appropriate dashboard.
           Both patient and caregiver dashboards already

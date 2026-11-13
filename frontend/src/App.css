@@ -406,3 +406,84 @@
 .vital-card-danger .vital-status {
   color: #fca5a5;
 }
+
+
+/* =========================================
+   ALERTS PAGE
+   ========================================= */
+
+/* Responsive grid for alert cards */
+.alerts-list {
+  display: grid;
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(min(100%, 340px), 1fr)
+  );
+  gap: 18px;
+  margin-top: 24px;
+  align-items: start;
+}
+
+/* Individual alert card */
+.alert-item {
+  background-color: #171e26;
+  border: 1px solid #343e48;
+  border-left: 4px solid #ef4444;
+  border-radius: 10px;
+  padding: 20px;
+  transition: border-color 0.2s ease;
+}
+
+.alert-item h3 {
+  margin: 0 0 16px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+
+.alert-item p {
+  margin: 8px 0;
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+/* Acknowledged alerts use a green accent */
+.alert-item:has(.alert-status-acknowledged) {
+  border-left-color: #84cc16;
+}
+
+/* Status labels */
+.alert-status-active {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.alert-status-acknowledged {
+  color: #a3e635;
+  font-weight: 600;
+}
+
+
+/* Caregiver alert acknowledgment button */
+.alert-acknowledge-button {
+  margin-top: 14px;
+  padding: 9px 16px;
+  background-color: #365314;
+  color: #d9f99d;
+  border: 1px solid #4d7c0f;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.alert-acknowledge-button:hover:not(:disabled) {
+  background-color: #4d7c0f;
+}
+
+.alert-acknowledge-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

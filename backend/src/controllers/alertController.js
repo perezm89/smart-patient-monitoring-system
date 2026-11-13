@@ -1,7 +1,9 @@
+
 const mongoose = require('mongoose');
 const Alert = require('../models/Alert');
 const User = require('../models/User');
 
+// AUTHORIZATION HELPER
 // Get patient IDs the authenticated user can access.
 const getAuthorizedPatientIds = (user) => {
   if (user.role === 'patient') {
@@ -9,12 +11,13 @@ const getAuthorizedPatientIds = (user) => {
   }
 
   if (user.role === 'caregiver') {
-    return user.assignedPatients;
+    return user.assignedPatients || [];
   }
 
   return [];
 };
 
+// GET ALL AUTHORIZED ALERTS
 // GET /api/v1/alerts
 const getAlerts = async (req, res) => {
   try {
@@ -41,7 +44,10 @@ const getAlerts = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Failed to retrieve alerts:', error.message);
+    console.error(
+      'Failed to retrieve alerts:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
@@ -50,6 +56,7 @@ const getAlerts = async (req, res) => {
   }
 };
 
+// GET INDIVIDUAL AUTHORIZED ALERT
 // GET /api/v1/alerts/:id
 const getAlertById = async (req, res) => {
   try {
@@ -91,7 +98,10 @@ const getAlertById = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Failed to retrieve alert:', error.message);
+    console.error(
+      'Failed to retrieve alert:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
@@ -100,11 +110,13 @@ const getAlertById = async (req, res) => {
   }
 };
 
+// ACKNOWLEDGE ALERT
 // PATCH /api/v1/alerts/:id/acknowledge
 const acknowledgeAlert = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Validate the MongoDB alert ID.
     if (!mongoose.isObjectIdOrHexString(id)) {
       return res.status(400).json({
         success: false,
@@ -112,6 +124,7 @@ const acknowledgeAlert = async (req, res) => {
       });
     }
 
+    // Retrieve the authenticated user.
     const user = await User.findById(req.user.userId);
 
     if (!user) {
@@ -121,6 +134,18 @@ const acknowledgeAlert = async (req, res) => {
       });
     }
 
+    // SECURITY:
+    // Only caregivers may acknowledge alerts.
+    // Patients retain read-only access to their alerts.
+    if (user.role !== 'caregiver') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only caregivers can acknowledge alerts'
+      });
+    }
+
+    // Caregivers can only acknowledge alerts
+    // belonging to their assigned patients.
     const patientIds = getAuthorizedPatientIds(user);
 
     const alert = await Alert.findOneAndUpdate(
@@ -129,7 +154,9 @@ const acknowledgeAlert = async (req, res) => {
         patientId: { $in: patientIds }
       },
       {
-        $set: { status: 'acknowledged' }
+        $set: {
+          status: 'acknowledged'
+        }
       },
       {
         new: true,
@@ -151,7 +178,10 @@ const acknowledgeAlert = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Failed to acknowledge alert:', error.message);
+    console.error(
+      'Failed to acknowledge alert:',
+      error.message
+    );
 
     return res.status(500).json({
       success: false,
@@ -160,6 +190,7 @@ const acknowledgeAlert = async (req, res) => {
   }
 };
 
+// EXPORT CONTROLLERS
 module.exports = {
   getAlerts,
   getAlertById,
