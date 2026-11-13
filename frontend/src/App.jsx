@@ -17,6 +17,7 @@ import Sidebar from './components/Sidebar';
 import VitalCard from './components/VitalCard';
 import VitalsChart from './components/VitalsChart';
 import CaregiverDashboard from './components/CaregiverDashboard';
+import DevicesPage from './pages/DevicesPage';
 
 // Authentication pages
 import LoginPage from './pages/LoginPage';
@@ -392,6 +393,16 @@ function App() {
           element={
             <ProtectedRoute>
               <AlertsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Protected devices page for patients and caregivers */}
+        <Route
+          path="/devices"
+          element={
+            <ProtectedRoute>
+              <DevicesPage />
             </ProtectedRoute>
           }
         />
