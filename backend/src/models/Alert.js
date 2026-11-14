@@ -17,13 +17,12 @@ const alertSchema = new mongoose.Schema(
     vitalId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vital',
-      required: true,
-      unique: true
+      required: true
     },
 
     type: {
       type: String,
-      enum: ['fall'],
+      enum: ['fall', 'sos'],
       required: true
     },
 
@@ -41,6 +40,12 @@ const alertSchema = new mongoose.Schema(
   {
     timestamps: true
   }
+);
+
+// Allow one alert of each type per vital record.
+alertSchema.index(
+  { vitalId: 1, type: 1 },
+  { unique: true }
 );
 
 module.exports = mongoose.model('Alert', alertSchema);

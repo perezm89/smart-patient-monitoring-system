@@ -8,7 +8,8 @@ const createVital = async (req, res) => {
             heartRateBpm,
             spo2Percent,
             skinTemperatureC,
-            fallDetected
+            fallDetected,
+            sosTriggered
         } = req.body;
 
         const device = req.device;
@@ -27,7 +28,8 @@ const createVital = async (req, res) => {
             heartRateBpm,
             spo2Percent,
             skinTemperatureC,
-            fallDetected
+            fallDetected,
+            sosTriggered
         });
 
         const savedVital = await vital.save();
@@ -45,6 +47,22 @@ const createVital = async (req, res) => {
 
             console.log(
                 `Fall alert created for patient ${savedVital.patientId}`
+            );
+        }
+
+        if (savedVital.sosTriggered === true) {
+            const alert = new Alert({
+                patientId: savedVital.patientId,
+                deviceId: savedVital.deviceId,
+                vitalId: savedVital._id,
+                type: 'sos',
+                timestamp: savedVital.timestamp
+            });
+
+            await alert.save();
+
+            console.log(
+                `SOS alert created for patient ${savedVital.patientId}`
             );
         }
 

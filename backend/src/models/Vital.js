@@ -40,6 +40,11 @@ const vitalSchema = new mongoose.Schema(
     fallDetected: {
       type: Boolean,
       default: false
+    },
+
+    sosTriggered: {
+      type: Boolean,
+      default: false
     }
   },
   {
