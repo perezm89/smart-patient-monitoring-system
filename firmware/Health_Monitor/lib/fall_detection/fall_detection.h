@@ -24,7 +24,6 @@ float fall_detection_accel_magnitude(const float accel[3]);
 
 // Detect if acceleration magnitude is above impact threshold.
 bool fall_detection_detect_impact(float accel_magnitude);
-#endif
 
 // Calibrate gyroscope.
 void fall_detection_calibrate_gyro(float gyro[3]);
@@ -48,3 +47,5 @@ typedef enum
 void fall_detection_reset(void);
 
 bool fall_detection_update(float accel_magnitude, float gyro_magnitude, uint32_t current_time_ms);
+
+#endif /* FALL_DETECTION_H */

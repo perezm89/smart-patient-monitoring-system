@@ -6,6 +6,7 @@
 
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_crt_bundle.h"
 
 static const char *TAG = "HTTP_CLIENT";
 
@@ -23,7 +24,8 @@ esp_err_t http_client_send_vitals(
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
-        .timeout_ms = 10000
+        .timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach
     };
 
     esp_http_client_handle_t client =
@@ -68,7 +70,7 @@ esp_err_t http_client_send_vitals(
             status_code
         );
 
-        if (status_code != 201)
+        if (status_code < 200 || status_code >= 300)
         {
             ESP_LOGE(
                 TAG,

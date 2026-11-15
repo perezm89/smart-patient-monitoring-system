@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE. 
  *
- * @file      driver_max30102_interface_template.c
+ * @file      driver_max30102_interface.c
  * @brief     driver max30102 interface template source file
  * @version   1.0.0
  * @author    Shifeng Li
@@ -35,6 +35,23 @@
  */
 
 #include "driver_max30102_interface.h"
+#include "i2c_interface.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define MAX30102_I2C_ADDRESS            0x57
+#define MAX30102_I2C_TIMEOUT            1000
+
+static const char *TAG = "MAX30102";
+
+static i2c_master_dev_handle_t max30102_dev = NULL;
 
 /**
  * @brief  interface iic bus init
@@ -45,6 +62,33 @@
  */
 uint8_t max30102_interface_iic_init(void)
 {
+    if(i2c_bus == NULL)
+    {
+        ESP_LOGE(TAG, "I2C bus not initialized");
+        return 1;
+    }
+
+    if(max30102_dev != NULL)
+        return 0;
+    
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = MAX30102_I2C_ADDRESS,
+        .scl_speed_hz = I2C_FREQ_HZ
+    };
+
+    esp_err_t ret = i2c_master_bus_add_device(
+        i2c_bus,
+        &dev_config,
+        &max30102_dev
+    );
+
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Device registration failed: %s", esp_err_to_name(ret));
+        return 1;
+    }
+
     return 0;
 }
 
@@ -57,6 +101,16 @@ uint8_t max30102_interface_iic_init(void)
  */
 uint8_t max30102_interface_iic_deinit(void)
 {
+    if (max30102_dev == NULL)
+        return 0;
+
+    esp_err_t ret = i2c_master_bus_rm_device(max30102_dev);
+
+    if (ret != ESP_OK)
+        return 1;
+
+    max30102_dev = NULL;
+
     return 0;
 }
 
@@ -73,7 +127,21 @@ uint8_t max30102_interface_iic_deinit(void)
  */
 uint8_t max30102_interface_iic_read(uint8_t addr, uint8_t reg, uint8_t *buf, uint16_t len)
 {
-    return 0;
+    (void)addr;
+
+    if (max30102_dev == NULL || buf == NULL)
+        return 1;
+
+    esp_err_t ret = i2c_master_transmit_receive(
+        max30102_dev,
+        &reg,
+        1,
+        buf,
+        len,
+        MAX30102_I2C_TIMEOUT
+    );
+
+    return ret == ESP_OK ? 0 : 1;
 }
 
 /**
@@ -89,7 +157,31 @@ uint8_t max30102_interface_iic_read(uint8_t addr, uint8_t reg, uint8_t *buf, uin
  */
 uint8_t max30102_interface_iic_write(uint8_t addr, uint8_t reg, uint8_t *buf, uint16_t len)
 {
-    return 0;
+    (void)addr;
+
+    if (max30102_dev == NULL || (len > 0 && buf == NULL))
+        return 1;
+
+    uint8_t *tx_buffer = malloc(len + 1);
+
+    if (tx_buffer == NULL)
+        return 1;
+
+    tx_buffer[0] = reg;
+
+    if (len > 0)
+        memcpy(&tx_buffer[1], buf, len);
+
+    esp_err_t ret = i2c_master_transmit(
+        max30102_dev,
+        tx_buffer,
+        len + 1,
+        MAX30102_I2C_TIMEOUT
+    );
+
+    free(tx_buffer);
+
+    return ret == ESP_OK ? 0 : 1;
 }
 
 /**
@@ -99,7 +191,10 @@ uint8_t max30102_interface_iic_write(uint8_t addr, uint8_t reg, uint8_t *buf, ui
  */
 void max30102_interface_delay_ms(uint32_t ms)
 {
+    if (ms == 0)
+        return;
 
+    vTaskDelay(pdMS_TO_TICKS(ms) > 0 ? pdMS_TO_TICKS(ms) : 1);
 }
 
 /**
@@ -109,7 +204,11 @@ void max30102_interface_delay_ms(uint32_t ms)
  */
 void max30102_interface_debug_print(const char *const fmt, ...)
 {
-    
+    va_list args;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
 }
 
 /**
@@ -119,43 +218,5 @@ void max30102_interface_debug_print(const char *const fmt, ...)
  */
 void max30102_interface_receive_callback(uint8_t type)
 {
-    switch (type)
-    {
-        case MAX30102_INTERRUPT_STATUS_FIFO_FULL :
-        {
-            max30102_interface_debug_print("max30102: irq fifo full.\n");
-            
-            break;
-        }
-        case MAX30102_INTERRUPT_STATUS_PPG_RDY :
-        {
-            max30102_interface_debug_print("max30102: irq ppg rdy.\n");
-            
-            break;
-        }
-        case MAX30102_INTERRUPT_STATUS_ALC_OVF :
-        {
-            max30102_interface_debug_print("max30102: irq alc ovf.\n");
-            
-            break;
-        }
-        case MAX30102_INTERRUPT_STATUS_PWR_RDY :
-        {
-            max30102_interface_debug_print("max30102: irq pwr rdy.\n");
-            
-            break;
-        }
-        case MAX30102_INTERRUPT_STATUS_DIE_TEMP_RDY :
-        {
-            max30102_interface_debug_print("max30102: irq die temp rdy.\n");
-            
-            break;
-        }
-        default :
-        {
-            max30102_interface_debug_print("max30102: unknown code.\n");
-            
-            break;
-        }
-    }
+    ESP_LOGI(TAG, "Interrupt event: %u", type);
 }

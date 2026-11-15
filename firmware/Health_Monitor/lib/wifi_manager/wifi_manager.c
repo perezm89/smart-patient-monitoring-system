@@ -35,6 +35,7 @@ static void wifi_event_handler(
     else if(event_base == WIFI_EVENT &&
             event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        xEventGroupClearBits(wifi_event_group, WIFI_CONNECTED_BIT);
         if(retry_count < WIFI_MAX_RETRIES)
         {
             retry_count++;
@@ -69,6 +70,7 @@ static void wifi_event_handler(
         );
 
         retry_count = 0;
+        xEventGroupClearBits(wifi_event_group, WIFI_FAILED_BIT);
 
         xEventGroupSetBits(
             wifi_event_group,
@@ -223,4 +225,31 @@ esp_err_t wifi_manager_connect(
     }
 
     return ESP_FAIL;
+}
+
+bool wifi_manager_is_connected(void)
+{
+    return wifi_event_group != NULL &&
+           (xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT) != 0;
+}
+
+esp_err_t wifi_manager_reconnect(void)
+{
+    if (wifi_event_group == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (wifi_manager_is_connected()) {
+        return ESP_OK;
+    }
+    /* The event handler is already retrying unless FAILED_BIT is set. */
+    if ((xEventGroupGetBits(wifi_event_group) & WIFI_FAILED_BIT) == 0) {
+        return ESP_OK;
+    }
+    xEventGroupClearBits(wifi_event_group, WIFI_FAILED_BIT);
+    retry_count = 0;
+    esp_err_t ret = esp_wifi_connect();
+    if (ret != ESP_OK) {
+        xEventGroupSetBits(wifi_event_group, WIFI_FAILED_BIT);
+    }
+    return ret;
 }
