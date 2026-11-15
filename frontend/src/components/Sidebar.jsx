@@ -56,11 +56,7 @@ function Sidebar() {
         <NavLink to="/devices">
           Devices
         </NavLink>
-
-        <NavLink to="/profile">
-          Profile
-        </NavLink>
-
+        
       </nav>
 
       {/* Logout button */}
