@@ -622,3 +622,117 @@
     height: 250px;
   }
 }
+
+
+/* ==========================================
+   DEVICE CLAIM FORM
+   ========================================== */
+
+.device-claim-section {
+  background-color: #171e26;
+  border: 1px solid #343e48;
+  border-radius: 10px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.device-claim-section h2 {
+  color: #f8fafc;
+  font-size: 19px;
+  margin: 0 0 10px;
+}
+
+.device-claim-section > p {
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.device-claim-section form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.device-claim-section form > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+
+.device-claim-section label {
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.device-claim-section input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 11px 12px;
+  background-color: #0f1720;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  color: #f8fafc;
+  font-size: 14px;
+}
+
+.device-claim-section input:focus {
+  outline: 2px solid #84cc16;
+  outline-offset: 1px;
+  border-color: #84cc16;
+}
+
+.device-claim-section input::placeholder {
+  color: #64748b;
+}
+
+.device-claim-section button {
+  padding: 11px 20px;
+  min-height: 42px;
+  background-color: #4d7c0f;
+  border: 1px solid #65a30d;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.device-claim-section button:hover:not(:disabled) {
+  background-color: #65a30d;
+}
+
+.device-claim-section button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.device-claim-section [role="alert"] {
+  color: #fca5a5;
+  margin-top: 16px;
+}
+
+.device-claim-section [role="status"] {
+  color: #a3e635;
+  margin-top: 16px;
+}
+
+@media (max-width: 600px) {
+  .device-claim-section {
+    padding: 16px;
+  }
+
+  .device-claim-section form > div {
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .device-claim-section button {
+    width: 100%;
+  }
+}
