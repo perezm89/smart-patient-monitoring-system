@@ -560,3 +560,65 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Compact desktop dashboard layout */
+@media (min-width: 1101px) {
+  .sidebar {
+    width: 180px;
+    min-width: 180px;
+    padding: 16px 12px;
+  }
+
+  .sidebar-brand {
+    padding: 6px 8px 18px;
+  }
+
+  .sidebar-nav {
+    padding-top: 16px;
+    gap: 4px;
+  }
+
+  .sidebar-nav a {
+    padding: 9px 12px;
+    font-size: 14px;
+  }
+
+  .dashboard-main {
+    padding: 24px;
+  }
+
+  .dashboard-header {
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+  }
+
+  .dashboard-header h1 {
+    font-size: 24px;
+  }
+
+  .vitals-grid {
+    gap: 12px;
+  }
+
+  .vital-card {
+    padding: 16px;
+  }
+
+  .vital-icon {
+    font-size: 22px;
+  }
+
+  .vital-value {
+    font-size: 26px;
+    margin: 12px 0;
+  }
+
+  .chart-container {
+    margin-top: 18px;
+    padding: 18px;
+  }
+
+  .chart-wrapper {
+    height: 250px;
+  }
+}
