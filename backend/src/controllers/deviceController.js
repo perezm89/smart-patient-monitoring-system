@@ -139,7 +139,7 @@ const getDevices = async (req, res) => {
     const devices = await Device.find({
       assignedPatient: { $in: patientIds }
     })
-      .select('deviceId assignedPatient active createdAt')
+      .select('deviceId deviceType assignedPatient active createdAt')
       .populate('assignedPatient', 'firstName lastName')
       .sort({ createdAt: -1 })
       .lean();
@@ -154,9 +154,10 @@ const getDevices = async (req, res) => {
           .select('timestamp')
           .lean();
 
-        return {
+       return {
           id: device._id,
           deviceId: device.deviceId,
+          deviceType: device.deviceType || 'physical',
           active: device.active,
           assignedPatient: {
             id: device.assignedPatient._id,
@@ -185,8 +186,84 @@ const getDevices = async (req, res) => {
   }
 };
 
+const claimDevice = async (req, res) => {
+  try {
+    const { deviceId, apiKey } = req.body;
+
+    if (!deviceId || !apiKey) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device ID and claim credential are required'
+      });
+    }
+
+    const patient = await User.findById(req.user.userId);
+
+    if (!patient || patient.role !== 'patient') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only patients can claim devices'
+      });
+    }
+
+    const device = await Device.findOne({ deviceId });
+
+    if (!device || !device.active) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found or inactive'
+      });
+    }
+
+    const validKey = await bcrypt.compare(apiKey, device.apiKeyHash);
+
+    if (!validKey) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid device credentials'
+      });
+    }
+
+    const claimedDevice = await Device.findOneAndUpdate(
+      {
+        _id: device._id,
+        assignedPatient: null,
+        active: true
+      },
+      { $set: { assignedPatient: patient._id } },
+      { new: true }
+    );
+
+    if (!claimedDevice) {
+      return res.status(409).json({
+        success: false,
+        message: 'Device is already assigned'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Device claimed successfully',
+      device: {
+        deviceId: claimedDevice.deviceId,
+        deviceType: claimedDevice.deviceType,
+        assignedPatient: claimedDevice.assignedPatient
+      }
+    });
+
+  } catch (error) {
+    console.error('Device claim failed:', error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
 module.exports = {
   registerDevice,
   assignDeviceToPatient,
-  getDevices
+  getDevices,
+  claimDevice
 };

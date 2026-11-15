@@ -24,6 +24,11 @@ function Sidebar() {
     // Remove the user's role so the next login starts fresh.
     sessionStorage.removeItem('userRole');
 
+    // Clear account information on logout.
+    sessionStorage.removeItem('userId');
+    sessionStorage.removeItem('userFirstName');
+    sessionStorage.removeItem('userLastName');
+
     // Redirect the user to the Login page.
     // replace: true prevents the dashboard from remaining
     // as the most recent entry in browser history.

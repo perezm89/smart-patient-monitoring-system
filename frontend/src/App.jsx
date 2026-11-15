@@ -167,6 +167,18 @@ function Dashboard() {
 
           <h1>Patient Dashboard</h1>
 
+          <p>
+            Welcome back,{' '}
+            <strong>
+              {sessionStorage.getItem('userFirstName')}{' '}
+              {sessionStorage.getItem('userLastName')}
+            </strong>!
+          </p>
+
+          <p>
+            Patient ID: {sessionStorage.getItem('userId')}
+          </p>
+
           <p>Recorded patient vitals and device status</p>
 
           {/* Timestamp of the latest stored measurement.

@@ -204,6 +204,15 @@ function CaregiverDashboard() {
 
         <header className="dashboard-header">
           <h1>Caregiver Dashboard</h1>
+
+          <p>
+            Welcome back,{' '}
+            <strong>
+              {sessionStorage.getItem('userFirstName')}{' '}
+              {sessionStorage.getItem('userLastName')}
+            </strong>!
+          </p>
+
           <p>Monitor your assigned patients</p>
         </header>
 

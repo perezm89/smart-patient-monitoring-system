@@ -12,6 +12,17 @@ function DevicesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // Device claiming is available to patients only.
+  const isPatient =
+    sessionStorage.getItem('userRole') === 'patient';
+
+  // Claim Device form state.
+  const [claimDeviceId, setClaimDeviceId] = useState('');
+  const [claimApiKey, setClaimApiKey] = useState('');
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [claimError, setClaimError] = useState('');
+  const [claimSuccess, setClaimSuccess] = useState('');
+
   // Format MongoDB timestamps for display.
   const formatTimestamp = (timestamp) => {
     if (!timestamp) {
@@ -25,6 +36,64 @@ function DevicesPage() {
     }
 
     return date.toLocaleString();
+  };
+
+  // Claim an available device for the logged-in patient.
+  const handleClaimDevice = async (event) => {
+    event.preventDefault();
+
+    if (!isPatient || claimLoading) return;
+
+    setClaimError('');
+    setClaimSuccess('');
+    setClaimLoading(true);
+
+    try {
+      const response = await api.post(
+        '/api/v1/devices/claim',
+        {
+          deviceId: claimDeviceId.trim(),
+          apiKey: claimApiKey.trim()
+        }
+      );
+
+      if (!response.data.success) {
+        throw new Error('Device claim failed');
+      }
+
+      setClaimSuccess('Device claimed successfully!');
+      setClaimDeviceId('');
+
+      // Refresh the list immediately after claiming.
+      // A refresh failure does not undo a successful claim.
+      try {
+        const devicesResponse = await api.get(
+          '/api/v1/devices'
+        );
+
+        if (Array.isArray(devicesResponse.data.data)) {
+          setDevices(devicesResponse.data.data);
+          setError('');
+        }
+      } catch (refreshError) {
+        console.error(
+          'Unable to refresh devices after claiming:',
+          refreshError
+        );
+        // Automatic polling will retry.
+      }
+
+    } catch (err) {
+      setClaimError(
+        err.response?.data?.message ||
+        err.message ||
+        'Unable to claim device'
+      );
+    } finally {
+      // Do not retain the claim credential after submission.
+      setClaimApiKey('');
+      setClaimLoading(false);
+    }
   };
 
   // FETCH DEVICES + AUTOMATIC POLLING
@@ -100,6 +169,74 @@ function DevicesPage() {
           </p>
         </header>
 
+        {/* PATIENT-ONLY DEVICE CLAIMING */}
+        {isPatient && (
+          <section className="device-claim-section">
+            <h2>Claim a Device</h2>
+
+            <p>
+              Enter your Device ID and claim credential
+              to connect a monitoring device to your account.
+            </p>
+
+            <form onSubmit={handleClaimDevice}>
+              <div>
+                <label htmlFor="claim-device-id">
+                  Device ID
+                </label>
+
+                <input
+                  id="claim-device-id"
+                  type="text"
+                  value={claimDeviceId}
+                  onChange={(event) =>
+                    setClaimDeviceId(event.target.value)
+                  }
+                  placeholder="e.g. SIM-ESP32-001"
+                  disabled={claimLoading}
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="claim-api-key">
+                  Claim Credential
+                </label>
+
+                <input
+                  id="claim-api-key"
+                  type="password"
+                  value={claimApiKey}
+                  onChange={(event) =>
+                    setClaimApiKey(event.target.value)
+                  }
+                  autoComplete="off"
+                  disabled={claimLoading}
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={claimLoading}
+              >
+                {claimLoading
+                  ? 'Claiming...'
+                  : 'Claim Device'}
+              </button>
+            </form>
+
+            {claimError && (
+              <p role="alert">{claimError}</p>
+            )}
+
+            {claimSuccess && (
+              <p role="status">{claimSuccess}</p>
+            )}
+          </section>
+        )}
+
+        {/* DEVICE LIST */}
         {loading && (
           <p>Loading devices...</p>
         )}
@@ -147,6 +284,13 @@ function DevicesPage() {
                       : 'Disabled'}
                   </span>
                 </div>
+
+                <p>
+                  <strong>Device Type:</strong>{' '}
+                  {device.deviceType === 'simulated'
+                    ? 'Simulated'
+                    : 'Physical'}
+                </p>
 
                 <p>
                   <strong>Assigned Patient:</strong>{' '}

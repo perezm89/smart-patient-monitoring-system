@@ -49,6 +49,11 @@ function Login() {
       // Backend authorization still validates the JWT.
       sessionStorage.setItem('userRole', user.role);
 
+      // Store account information for the dashboard.
+      sessionStorage.setItem('userId', user.id);
+      sessionStorage.setItem('userFirstName', user.firstName);
+      sessionStorage.setItem('userLastName', user.lastName);
+
       console.log('Login successful:', user.role);
 
       // Redirect based on the authenticated user's role.

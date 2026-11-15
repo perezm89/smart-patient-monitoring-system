@@ -9,6 +9,12 @@ const deviceSchema = new mongoose.Schema(
       trim: true
     },
 
+    deviceType: {
+      type: String,
+      enum: ['physical', 'simulated'],
+      default: 'physical'
+    },
+
     assignedPatient: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
