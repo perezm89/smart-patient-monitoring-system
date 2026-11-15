@@ -11,7 +11,9 @@ const registerUser = async (req, res) => {
       lastName,
       email,
       password,
-      role
+      role,
+      phoneNumber,
+      smsConsent
     } = req.body;
 
     if (!firstName || !lastName || !email || !password || !role) {
@@ -30,12 +32,25 @@ const registerUser = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
+    const caregiverPhone =
+      role === 'caregiver' && typeof phoneNumber === 'string'
+        ? phoneNumber.trim()
+        : null;
+
+      const hasSmsConsent =
+        role === 'caregiver' &&
+        smsConsent === true &&
+        Boolean(caregiverPhone);
+
     const user = new User({
       firstName,
       lastName,
       email,
       password: hashedPassword,
-      role
+      role,
+      phoneNumber: caregiverPhone,
+      smsConsent: hasSmsConsent,
+      smsConsentAt: hasSmsConsent ? new Date() : null
     });
 
     await user.save();

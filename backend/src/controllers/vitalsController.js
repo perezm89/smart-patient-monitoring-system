@@ -1,5 +1,7 @@
+
 const Vital = require('../models/Vital');
 const Alert = require('../models/Alert');
+const { notifyCaregivers } = require('../services/caregiverSmsService');
 
 const createVital = async (req, res) => {
     try {
@@ -34,6 +36,7 @@ const createVital = async (req, res) => {
 
         const savedVital = await vital.save();
 
+        // Handle fall detection
         if (savedVital.fallDetected === true) {
             const alert = new Alert({
                 patientId: savedVital.patientId,
@@ -48,8 +51,17 @@ const createVital = async (req, res) => {
             console.log(
                 `Fall alert created for patient ${savedVital.patientId}`
             );
+
+            // Notify assigned caregivers who opted in to SMS.
+            if (process.env.SMS_ENABLED === 'true') {
+                void notifyCaregivers(
+                    savedVital.patientId,
+                    'fall'
+                );
+            }
         }
 
+        // Handle emergency SOS
         if (savedVital.sosTriggered === true) {
             const alert = new Alert({
                 patientId: savedVital.patientId,
@@ -64,6 +76,14 @@ const createVital = async (req, res) => {
             console.log(
                 `SOS alert created for patient ${savedVital.patientId}`
             );
+
+            // Notify assigned caregivers who opted in to SMS.
+            if (process.env.SMS_ENABLED === 'true') {
+                void notifyCaregivers(
+                    savedVital.patientId,
+                    'sos'
+                );
+            }
         }
 
         return res.status(201).json({
@@ -73,7 +93,10 @@ const createVital = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Failed to record vitals:', error.message);
+        console.error(
+            'Failed to record vitals:',
+            error.message
+        );
 
         return res.status(500).json({
             success: false,

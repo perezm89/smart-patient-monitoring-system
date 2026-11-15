@@ -33,6 +33,22 @@ const userSchema = new mongoose.Schema(
       required: true
     },
 
+    phoneNumber: {
+      type: String,
+      trim: true,
+      default: null
+    },
+
+    smsConsent: {
+      type: Boolean,
+      default: false
+    },
+
+    smsConsentAt: {
+      type: Date,
+      default: null
+    },
+
     assignedPatients: [
       {
         type: mongoose.Schema.Types.ObjectId,
