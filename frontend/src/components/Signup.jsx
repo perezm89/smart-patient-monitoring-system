@@ -12,7 +12,9 @@ function Signup() {
     lastName: '',
     email: '',
     password: '',
-    role: 'patient'
+    role: 'patient',
+    phoneNumber: '',
+    smsConsent: false
   });
 
   // Submission state
@@ -21,11 +23,11 @@ function Signup() {
 
   // Update the corresponding field whenever the user types.
   const handleChange = (event) => {
-    const { name, value } = event.target;
+    const { name, value, type, checked } = event.target;
 
     setFormData((previous) => ({
       ...previous,
-      [name]: value
+      [name]: type === 'checkbox' ? checked : value
     }));
   };
 
@@ -37,15 +39,27 @@ function Signup() {
     setLoading(true);
 
     try {
-      await api.post('/api/v1/auth/register', formData);
+      const registrationData = {
+        ...formData,
+        phoneNumber:
+          formData.role === 'caregiver'
+            ? formData.phoneNumber.trim()
+            : '',
+        smsConsent:
+          formData.role === 'caregiver' &&
+          formData.smsConsent &&
+          Boolean(formData.phoneNumber.trim())
+      };
+
+      await api.post('/api/v1/auth/register', registrationData);
 
       // Redirect to Login and indicate that registration succeeded.
-        navigate('/login', {
+      navigate('/login', {
         replace: true,
         state: {
-            registrationSuccess: true
+          registrationSuccess: true
         }
-        });
+      });
     } catch (err) {
       setError(
         err.response?.data?.message ||
@@ -112,7 +126,61 @@ function Signup() {
           <option value="caregiver">Caregiver</option>
         </select>
 
-        {error && <p className="login-error" role="alert">{error}</p>}
+        {formData.role === 'caregiver' && (
+          <>
+            <label htmlFor="phoneNumber">
+              Mobile Phone Number (Optional)
+            </label>
+            <input
+              id="phoneNumber"
+              name="phoneNumber"
+              type="tel"
+              placeholder="+14075551234"
+              value={formData.phoneNumber}
+              onChange={handleChange}
+            />
+
+            <div className="sms-consent">
+              <label htmlFor="smsConsent">
+                <input
+                  id="smsConsent"
+                  name="smsConsent"
+                  type="checkbox"
+                  checked={formData.smsConsent}
+                  onChange={handleChange}
+                  disabled={!formData.phoneNumber.trim()}
+                />
+                {' '}
+                I agree to receive automated emergency SMS
+                notifications from Smart Patient Monitoring
+                System (SPMS) at the mobile number provided.
+                Notifications may include fall detection and
+                SOS alerts. Message frequency varies.
+                Message and data rates may apply.
+                Reply STOP to opt out or HELP for assistance.
+                Consent is optional and is not required
+                to create an account.
+              </label>
+              <p>
+                Please review our{' '}
+                <a href="/privacy" target="_blank" rel="noopener noreferrer">
+                  Privacy Policy
+                </a>
+                {' '}and{' '}
+                <a href="/terms" target="_blank" rel="noopener noreferrer">
+                  Terms &amp; Conditions
+                </a>
+                .
+              </p>
+            </div>
+          </>
+        )}
+
+        {error && (
+          <p className="login-error" role="alert">
+            {error}
+          </p>
+        )}
 
         <button type="submit" disabled={loading}>
           {loading ? 'Creating Account...' : 'Sign Up'}

@@ -23,6 +23,8 @@ import DevicesPage from './pages/DevicesPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
 import AlertsPage from './pages/AlertsPage';
+import PrivacyPolicy from './pages/PrivacyPolicy';
+import Terms from './pages/Terms';
 
 import './App.css';
 
@@ -363,6 +365,17 @@ function App() {
         <Route
           path="/signup"
           element={<SignupPage />}
+        />
+
+        {/* Public legal pages for SMS registration */}
+        <Route
+          path="/privacy"
+          element={<PrivacyPolicy />}
+        />
+
+        <Route
+          path="/terms"
+          element={<Terms />}
         />
 
 
