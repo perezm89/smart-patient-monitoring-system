@@ -94,9 +94,22 @@ function Dashboard() {
               new Date(a.timestamp) - new Date(b.timestamp)
           );
 
-          // Update the historical chart.
-          setVitalsHistory(sortedVitals);
+          // Display only today's measurements in the patient chart.
+          const now = new Date();
 
+          const todaysVitals = sortedVitals.filter((record) => {
+            const timestamp = new Date(record.timestamp);
+
+            return (
+              timestamp.getFullYear() === now.getFullYear() &&
+              timestamp.getMonth() === now.getMonth() &&
+              timestamp.getDate() === now.getDate()
+            );
+          });
+
+          // Update the chart with today's measurements only.
+          setVitalsHistory(todaysVitals);
+          
           // Update cards with the newest measurement.
           setLatestVitals(
             sortedVitals[sortedVitals.length - 1]
