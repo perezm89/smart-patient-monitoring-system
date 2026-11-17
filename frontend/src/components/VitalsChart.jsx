@@ -32,7 +32,7 @@ function VitalsChart({ vitals = [] }) {
       </div>
 
       {chartData.length === 0 ? (
-        <p>No patient vitals recorded yet.</p>
+        <p>No vitals recorded today. New measurements will appear here automatically.</p>
       ) : (
         <div className="chart-wrapper">
           <ResponsiveContainer width="100%" height="100%">
