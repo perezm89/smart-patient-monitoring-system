@@ -22,6 +22,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "battery_monitor.h"
 #include "buttons.h"
 #include "buzzer.h"
 #include "device_config.h"
@@ -355,9 +356,28 @@ static void alert_task(void *arg)
             indicator_led_set(LED_CONNECTION, connection_led_on);
         }
 
-        /* No battery ADC driver is available yet; don't invent a low-battery state. */
-        indicator_led_set(LED_LOW_BATTERY, false);
         vTaskDelay(pdMS_TO_TICKS(ALERT_TASK_PERIOD_MS));
+    }
+}
+
+/* Runs independently of Wi-Fi and the vital-sign processing tasks. */
+static void battery_task(void *arg)
+{
+    (void)arg;
+    bool low_battery = false;
+
+    for (;;) {
+        float battery_v = 0.0f;
+        esp_err_t ret = battery_monitor_read_voltage(&battery_v);
+        if (ret == ESP_OK) {
+            low_battery = battery_monitor_is_low(battery_v, low_battery);
+            indicator_led_set(LED_LOW_BATTERY, low_battery);
+            ESP_LOGI("BATTERY", "Voltage: %.3f V | Low battery: %s", (double)battery_v, low_battery ? "YES" : "NO");
+        } else {
+            /* Preserve previous LED state; do not invent a battery reading. */
+            ESP_LOGW("BATTERY", "ADC read failed: %s", esp_err_to_name(ret));
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -458,7 +478,8 @@ static void telemetry_task(void *arg)
             snapshot.pending_fall_count > 0,
             snapshot.pending_sos_count > 0
         );
-        if (err != ESP_OK) {
+        if (err != ESP_OK) 
+        {
             ESP_LOGE(TAG, "JSON formatting failed: %s", esp_err_to_name(err));
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -467,7 +488,8 @@ static void telemetry_task(void *arg)
         ESP_LOGI(TAG, "POST %s", json);
         last_post_attempt_ms = now;
         err = http_client_send_vitals(BACKEND_URL, DEVICE_API_KEY, json);
-        if (err == ESP_OK) {
+        if (err == ESP_OK) 
+        {
             last_sent_ms = uptime_ms();
             xSemaphoreTake(state_mutex, portMAX_DELAY);
             /* Acknowledge only the events included in THIS successful POST.
@@ -503,6 +525,14 @@ void app_main(void)
     ESP_ERROR_CHECK(buttons_init());
     ESP_ERROR_CHECK(buttons_start_task());
     ESP_ERROR_CHECK(i2c_interface_init());
+
+    esp_err_t battery_init_ret = battery_monitor_init();
+    if (battery_init_ret != ESP_OK) {
+        ESP_LOGE("BATTERY", "ADC initialization failed: %s",
+                 esp_err_to_name(battery_init_ret));
+    } else if (xTaskCreate(battery_task, "battery_task", 3072, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE("BATTERY", "Could not start battery monitoring task");
+    }
 
     if (xTaskCreate(sensor_task, "sensor_task", 6144, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(alert_task, "alert_task", 3072, NULL, 5, NULL) != pdPASS) {
