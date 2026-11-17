@@ -736,3 +736,60 @@
     width: 100%;
   }
 }
+
+
+/* RELEASE DEVICE BUTTON */
+
+.device-item button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 12px;
+  padding: 11px 20px;
+  min-height: 42px;
+  background-color: #991b1b;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.device-item button:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+.device-item button:focus-visible {
+  outline: 2px solid #fca5a5;
+  outline-offset: 3px;
+}
+
+.device-item button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* RELEASE DEVICE FEEDBACK */
+
+.dashboard-main > [role="alert"] {
+  color: #fca5a5;
+  font-size: 14px;
+  margin: 12px 0;
+}
+
+.dashboard-main > [role="status"] {
+  color: #a3e635;
+  font-size: 14px;
+  margin: 12px 0;
+}
+
+/* MOBILE DEVICE BUTTON */
+
+@media (max-width: 600px) {
+  .device-item button {
+    width: 100%;
+  }
+}
+
