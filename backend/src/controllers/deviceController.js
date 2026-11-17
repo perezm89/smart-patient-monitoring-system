@@ -154,7 +154,7 @@ const getDevices = async (req, res) => {
           .select('timestamp')
           .lean();
 
-       return {
+        return {
           id: device._id,
           deviceId: device.deviceId,
           deviceType: device.deviceType || 'physical',
@@ -261,9 +261,60 @@ const claimDevice = async (req, res) => {
   }
 };
 
+// Release a device belonging to the authenticated patient.
+// Historical vitals remain associated with their original patient.
+const releaseDevice = async (req, res) => {
+  try {
+    const patient = await User.findById(req.user.userId);
+
+    if (!patient || patient.role !== 'patient') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only patients can release devices'
+      });
+    }
+
+    const releasedDevice = await Device.findOneAndUpdate(
+      {
+        deviceId: req.params.deviceId,
+        assignedPatient: patient._id
+      },
+      {
+        $set: { assignedPatient: null }
+      },
+      { new: true }
+    );
+
+    if (!releasedDevice) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found or not assigned to your account'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Device released successfully',
+      device: {
+        deviceId: releasedDevice.deviceId,
+        assignedPatient: releasedDevice.assignedPatient
+      }
+    });
+
+  } catch (error) {
+    console.error('Device release failed:', error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
 module.exports = {
   registerDevice,
   assignDeviceToPatient,
   getDevices,
-  claimDevice
+  claimDevice,
+  releaseDevice
 };

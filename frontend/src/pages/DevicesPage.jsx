@@ -4,15 +4,15 @@ import { useEffect, useState } from 'react';
 import Sidebar from '../components/Sidebar';
 import api from '../services/api';
 
-// Refresh device information every 5 seconds.
-const POLLING_INTERVAL_MS = 5000;
+// Refresh device information every 2.5 seconds.
+const POLLING_INTERVAL_MS = 2500;
 
 function DevicesPage() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Device claiming is available to patients only.
+  // Device claiming and releasing are available to patients only.
   const isPatient =
     sessionStorage.getItem('userRole') === 'patient';
 
@@ -22,6 +22,11 @@ function DevicesPage() {
   const [claimLoading, setClaimLoading] = useState(false);
   const [claimError, setClaimError] = useState('');
   const [claimSuccess, setClaimSuccess] = useState('');
+
+  // Release Device state.
+  const [releasingDeviceId, setReleasingDeviceId] = useState(null);
+  const [releaseError, setReleaseError] = useState('');
+  const [releaseSuccess, setReleaseSuccess] = useState('');
 
   // Format MongoDB timestamps for display.
   const formatTimestamp = (timestamp) => {
@@ -38,6 +43,18 @@ function DevicesPage() {
     return date.toLocaleString();
   };
 
+  // Refresh the device list after claiming or releasing.
+  const refreshDevices = async () => {
+    const response = await api.get('/api/v1/devices');
+
+    if (!Array.isArray(response.data.data)) {
+      throw new Error('Invalid devices response');
+    }
+
+    setDevices(response.data.data);
+    setError('');
+  };
+
   // Claim an available device for the logged-in patient.
   const handleClaimDevice = async (event) => {
     event.preventDefault();
@@ -46,6 +63,8 @@ function DevicesPage() {
 
     setClaimError('');
     setClaimSuccess('');
+    setReleaseError('');
+    setReleaseSuccess('');
     setClaimLoading(true);
 
     try {
@@ -64,17 +83,9 @@ function DevicesPage() {
       setClaimSuccess('Device claimed successfully!');
       setClaimDeviceId('');
 
-      // Refresh the list immediately after claiming.
       // A refresh failure does not undo a successful claim.
       try {
-        const devicesResponse = await api.get(
-          '/api/v1/devices'
-        );
-
-        if (Array.isArray(devicesResponse.data.data)) {
-          setDevices(devicesResponse.data.data);
-          setError('');
-        }
+        await refreshDevices();
       } catch (refreshError) {
         console.error(
           'Unable to refresh devices after claiming:',
@@ -93,6 +104,60 @@ function DevicesPage() {
       // Do not retain the claim credential after submission.
       setClaimApiKey('');
       setClaimLoading(false);
+    }
+  };
+
+  // Release a device assigned to the logged-in patient.
+  const handleReleaseDevice = async (deviceId) => {
+    if (!isPatient || releasingDeviceId !== null) return;
+
+    const confirmed = window.confirm(
+      `Release device ${deviceId}?\n\n` +
+      'This device will be disconnected from your account ' +
+      'and can be claimed by another patient. ' +
+      'Your historical measurements will be preserved.'
+    );
+
+    if (!confirmed) return;
+
+    setReleaseError('');
+    setReleaseSuccess('');
+    setClaimError('');
+    setClaimSuccess('');
+    setReleasingDeviceId(deviceId);
+
+    try {
+      const response = await api.post(
+        `/api/v1/devices/${encodeURIComponent(deviceId)}/release`
+      );
+
+      if (!response.data.success) {
+        throw new Error('Device release failed');
+      }
+
+      setReleaseSuccess(
+        `Device ${deviceId} released successfully.`
+      );
+
+      // A refresh failure does not undo a successful release.
+      try {
+        await refreshDevices();
+      } catch (refreshError) {
+        console.error(
+          'Unable to refresh devices after releasing:',
+          refreshError
+        );
+        // Automatic polling will retry.
+      }
+
+    } catch (err) {
+      setReleaseError(
+        err.response?.data?.message ||
+        err.message ||
+        'Unable to release device'
+      );
+    } finally {
+      setReleasingDeviceId(null);
     }
   };
 
@@ -143,7 +208,7 @@ function DevicesPage() {
     // Initial request.
     fetchDevices();
 
-    // Refresh every 5 seconds.
+    // Refresh every 2.5 seconds.
     const intervalId = setInterval(
       fetchDevices,
       POLLING_INTERVAL_MS
@@ -192,7 +257,7 @@ function DevicesPage() {
                   onChange={(event) =>
                     setClaimDeviceId(event.target.value)
                   }
-                  placeholder="e.g. SIM-ESP32-001"
+                  placeholder="e.g. ESP32-C6-DEMO"
                   disabled={claimLoading}
                   required
                 />
@@ -234,6 +299,15 @@ function DevicesPage() {
               <p role="status">{claimSuccess}</p>
             )}
           </section>
+        )}
+
+        {/* DEVICE RELEASE FEEDBACK */}
+        {isPatient && releaseError && (
+          <p role="alert">{releaseError}</p>
+        )}
+
+        {isPatient && releaseSuccess && (
+          <p role="status">{releaseSuccess}</p>
         )}
 
         {/* DEVICE LIST */}
@@ -308,6 +382,21 @@ function DevicesPage() {
                   <strong>Last Measurement:</strong>{' '}
                   {formatTimestamp(device.lastReadingAt)}
                 </p>
+
+                {/* Only patients can release their assigned devices. */}
+                {isPatient && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleReleaseDevice(device.deviceId)
+                    }
+                    disabled={releasingDeviceId !== null}
+                  >
+                    {releasingDeviceId === device.deviceId
+                      ? 'Releasing...'
+                      : 'Release Device'}
+                  </button>
+                )}
               </article>
             );
           })}
