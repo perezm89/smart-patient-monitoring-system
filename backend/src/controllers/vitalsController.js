@@ -2,6 +2,7 @@
 const Vital = require('../models/Vital');
 const Alert = require('../models/Alert');
 const { notifyCaregivers } = require('../services/caregiverSmsService');
+const { sendWhatsApp } = require('../services/whatsappService');
 
 const createVital = async (req, res) => {
     try {
@@ -59,6 +60,13 @@ const createVital = async (req, res) => {
                     'fall'
                 );
             }
+
+            // Send WhatsApp fall alert to the configured Sandbox recipient.
+            if (process.env.WHATSAPP_ENABLED === 'true') {
+                void sendWhatsApp(
+                    `SPMS FALL ALERT: A fall was detected for patient ${savedVital.patientId}. Please check on the patient immediately.`
+                );
+            }
         }
 
         // Handle emergency SOS
@@ -82,6 +90,13 @@ const createVital = async (req, res) => {
                 void notifyCaregivers(
                     savedVital.patientId,
                     'sos'
+                );
+            }
+
+            // Send WhatsApp SOS alert to the configured Sandbox recipient.
+            if (process.env.WHATSAPP_ENABLED === 'true') {
+                void sendWhatsApp(
+                    `SPMS SOS ALERT: Patient ${savedVital.patientId} triggered an emergency SOS. Please check on the patient immediately.`
                 );
             }
         }
