@@ -1,0 +1,5 @@
+{
+  "name": "maxim_spo2",
+  "version": "1.0.0",
+  "description": "Maxim MAXREFDES117 algorithm (download original MIT-licensed files with setup_maxim.py)"
+}

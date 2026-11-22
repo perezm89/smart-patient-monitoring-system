@@ -29,3 +29,10 @@ Thumbs.db
 # ESP32 local configuration
 # Contains Wi-Fi credentials, backend URL, and device API key
 firmware/Health_Monitor/src/device_config.h
+
+# ESP-IDF managed dependencies
+firmware/Health_Monitor/managed_components/
+
+# ESP-IDF configuration backups
+firmware/Health_Monitor/sdkconfig.*.backup
+firmware/Health_Monitor/sdkconfig.*.old

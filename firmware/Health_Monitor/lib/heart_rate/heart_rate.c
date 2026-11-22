@@ -1,200 +1,116 @@
+
 #include "heart_rate.h"
 
-#include "signal_processing.h"
+#define SAMPLE_RATE_HZ      100
+#define BASELINE_WINDOW    100
+#define SMOOTH_WINDOW      5
 
-#include <stddef.h>
-#include <stdint.h>
+#define MIN_BPM            40
+#define MAX_BPM            180
 
-size_t heart_rate_minimum_peak_distance(float sample_rate_hz)
+#define MIN_PEAK_INTERVAL  (SAMPLE_RATE_HZ * 60 / MAX_BPM)
+#define MAX_PEAK_INTERVAL  (SAMPLE_RATE_HZ * 60 / MIN_BPM)
+
+#define PEAK_THRESHOLD     20.0f
+
+static float baseline_buffer[BASELINE_WINDOW];
+static float smooth_buffer[SMOOTH_WINDOW];
+
+static float baseline_sum;
+static float smooth_sum;
+
+static uint32_t sample_count;
+static uint32_t last_peak_sample;
+
+static float previous_filtered;
+static float previous_previous_filtered;
+
+static bool have_peak;
+
+void heart_rate_init(void)
 {
-    if(sample_rate_hz <= 0.0f)
-    {
-        return 0U;
-    }
+    baseline_sum = 0;
+    smooth_sum = 0;
+    sample_count = 0;
+    last_peak_sample = 0;
+    previous_filtered = 0;
+    previous_previous_filtered = 0;
+    have_peak = false;
 
-    /*
-     * Round upward without calling ceilf(), avoiding an unnecessary math
-     * library operation.
-     */
-    const float distance =
-        (60.0f * sample_rate_hz) / HEART_RATE_BPM_MAX;
+    for (int i = 0; i < BASELINE_WINDOW; i++)
+        baseline_buffer[i] = 0;
 
-    const size_t whole_distance = (size_t)distance;
-
-    return ((float)whole_distance < distance) ?
-           (whole_distance + 1U) :
-           whole_distance;
+    for (int i = 0; i < SMOOTH_WINDOW; i++)
+        smooth_buffer[i] = 0;
 }
 
-float heart_rate_calculate_threshold(
-    const float *samples,
-    size_t sample_count
-)
+bool heart_rate_add_sample(uint32_t ir_value, float *bpm)
 {
-    if((samples == NULL) || (sample_count == 0U))
+    float sample = (float)ir_value;
+
+    // Update moving-average baseline
+    uint32_t baseline_index = sample_count % BASELINE_WINDOW;
+
+    baseline_sum -= baseline_buffer[baseline_index];
+    baseline_buffer[baseline_index] = sample;
+    baseline_sum += sample;
+
+    // Wait until baseline buffer is full
+    if (sample_count < BASELINE_WINDOW - 1)
     {
-        return 0.0f;
+        sample_count++;
+        return false;
     }
 
-    return signal_mean(samples, sample_count) +
-           (HEART_RATE_THRESHOLD_FACTOR *
-            signal_peak_to_peak(samples, sample_count));
-}
+    float baseline = baseline_sum / BASELINE_WINDOW;
 
-size_t heart_rate_find_peaks(
-    const float *samples,
-    size_t sample_count,
-    float threshold,
-    size_t minimum_peak_distance,
-    size_t *peak_indices,
-    size_t max_peaks
-)
-{
-    if((samples == NULL) ||
-       (peak_indices == NULL) ||
-       (sample_count < 3U) ||
-       (max_peaks == 0U))
+    // Remove DC component
+    float filtered = sample - baseline;
+
+    // Smooth filtered signal
+    uint32_t smooth_index = sample_count % SMOOTH_WINDOW;
+
+    smooth_sum -= smooth_buffer[smooth_index];
+    smooth_buffer[smooth_index] = filtered;
+    smooth_sum += filtered;
+
+    float smoothed = smooth_sum / SMOOTH_WINDOW;
+
+    bool result = false;
+
+    // Detect local maximum
+    if (previous_filtered > previous_previous_filtered &&
+        previous_filtered >= smoothed &&
+        previous_filtered > PEAK_THRESHOLD)
     {
-        return 0U;
-    }
+        uint32_t peak_sample = sample_count - 1;
 
-    size_t peak_count = 0U;
-
-    for(size_t i = 1U; i < (sample_count - 1U); i++)
-    {
-        if((samples[i] <= threshold) ||
-           (samples[i] <= samples[i - 1U]) ||
-           (samples[i] <= samples[i + 1U]))
+        if (!have_peak)
         {
-            continue;
+            last_peak_sample = peak_sample;
+            have_peak = true;
         }
-
-        if(peak_count == 0U)
+        else
         {
-            peak_indices[peak_count++] = i;
-            continue;
-        }
+            uint32_t interval = peak_sample - last_peak_sample;
 
-        const size_t previous_peak =
-            peak_indices[peak_count - 1U];
-
-        if((i - previous_peak) >= minimum_peak_distance)
-        {
-            if(peak_count >= max_peaks)
+            if (interval >= MIN_PEAK_INTERVAL)
             {
-                break;
+                if (interval <= MAX_PEAK_INTERVAL)
+                {
+                    *bpm = (60.0f * SAMPLE_RATE_HZ) / interval;
+                    result = true;
+                }
+
+                last_peak_sample = peak_sample;
             }
-
-            peak_indices[peak_count++] = i;
-        }
-        else if(samples[i] > samples[previous_peak])
-        {
-            peak_indices[peak_count - 1U] = i;
         }
     }
 
-    return peak_count;
-}
+    previous_previous_filtered = previous_filtered;
+    previous_filtered = smoothed;
 
-float heart_rate_calculate(
-    const size_t *peak_indices,
-    size_t peak_count,
-    float sample_rate_hz
-)
-{
-    if((peak_indices == NULL) ||
-       (peak_count < 2U) ||
-       (sample_rate_hz <= 0.0f))
-    {
-        return 0.0f;
-    }
+    sample_count++;
 
-    /*
-     * Interval limits are stored as integer sample counts because every
-     * measured interval is already an integer number of samples.
-     */
-    const size_t minimum_interval =
-        heart_rate_minimum_peak_distance(sample_rate_hz);
-
-    const size_t maximum_interval =
-        (size_t)((60.0f * sample_rate_hz) /
-                 HEART_RATE_BPM_MIN);
-
-    size_t valid_interval_count = 0U;
-    size_t interval_sum = 0U;
-
-    for(size_t i = 1U; i < peak_count; i++)
-    {
-        if(peak_indices[i] <= peak_indices[i - 1U])
-        {
-            return 0.0f;
-        }
-
-        const size_t interval =
-            peak_indices[i] - peak_indices[i - 1U];
-
-        if((interval < minimum_interval) ||
-           (interval > maximum_interval))
-        {
-            continue;
-        }
-
-        interval_sum += interval;
-        valid_interval_count++;
-    }
-
-    if(valid_interval_count == 0U)
-    {
-        return 0.0f;
-    }
-
-    /*
-     * Equivalent to calculating the average interval first, but requires one
-     * floating-point division instead of two.
-     */
-    return (60.0f * sample_rate_hz *
-            (float)valid_interval_count) /
-           (float)interval_sum;
-}
-
-float heart_rate_process(
-    const float *samples,
-    size_t sample_count,
-    float sample_rate_hz
-)
-{
-    if((samples == NULL) ||
-       (sample_count < 3U) ||
-       (sample_rate_hz <= 0.0f))
-    {
-        return 0.0f;
-    }
-
-    size_t peak_indices[HEART_RATE_MAX_PEAKS];
-
-    const size_t minimum_peak_distance =
-        heart_rate_minimum_peak_distance(sample_rate_hz);
-
-    const float threshold =
-        heart_rate_calculate_threshold(samples, sample_count);
-
-    const size_t peak_count = heart_rate_find_peaks(
-        samples,
-        sample_count,
-        threshold,
-        minimum_peak_distance,
-        peak_indices,
-        HEART_RATE_MAX_PEAKS
-    );
-
-    if(peak_count < 2U)
-    {
-        return 0.0f;
-    }
-
-    return heart_rate_calculate(
-        peak_indices,
-        peak_count,
-        sample_rate_hz
-    );
+    return result;
 }

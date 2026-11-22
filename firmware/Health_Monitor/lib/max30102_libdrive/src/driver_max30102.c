@@ -525,11 +525,11 @@ uint8_t max30102_read(max30102_handle_t *handle, uint32_t *raw_red, uint32_t *ra
             raw_red[i] = ((uint32_t)handle->buf[i * 6 + 0] << 16) |                                               /* get raw red data */
                          ((uint32_t)handle->buf[i * 6 + 1] << 8) |                                                /* get raw red data */
                          ((uint32_t)handle->buf[i * 6 + 2] << 0);                                                 /* get raw red data */
-            raw_red[i] = raw_red[i] >> bit;                                                                       /* right shift bit */
+            raw_red[i] = (raw_red[i] & 0x3FFFFUL) >> bit;                                                                      /* right shift bit */
             raw_ir[i] = ((uint32_t)handle->buf[i * 6 + 3] << 16) |                                                /* get raw ir data */
                         ((uint32_t)handle->buf[i * 6 + 4] << 8) |                                                 /* get raw ir data */
                         ((uint32_t)handle->buf[i * 6 + 5] << 0);                                                  /* get raw ir data */
-            raw_ir[i] = raw_ir[i] >> bit;                                                                         /* right shift bit */
+            raw_ir[i]  = (raw_ir[i]  & 0x3FFFFUL) >> bit;                                                                         /* right shift bit */
         }
     }
     

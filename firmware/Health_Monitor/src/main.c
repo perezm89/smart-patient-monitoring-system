@@ -1,626 +1,522 @@
-/******************************************************************************
- * File: main.c
+/**
+ * Smart patient monitor -- integrated ESP32-C6 application.
  *
- * Description:
- * Main application entry point for the Smart Senior Monitoring System.
- * Initializes hardware peripherals, configures sensors, and continuously
- * acquires physiological data for processing and transmission.
- ******************************************************************************/
-
-/******************************************************************************
- * Includes
- ******************************************************************************/
-
-#include <stdio.h>
-#include <stdint.h>
-#include <stddef.h>
+ * Sensor task: MAX30102 FIFO, TMP117 temperature, MPU6050 fall detection.
+ * Event task: debounced SOS queue, indicator LEDs, short buzzer alert.
+ * Telemetry task: UTC clock, JSON and HTTP POST; clears events only on 2xx.
+ *
+ * LibDriver MAX30102 FIFO + original heart_rate.c and spo2.c algorithms.
+ * The last successful readings are retained when later calculations fail.
+ * Do not send telemetry until every required vital has been measured.
+ */
 #include <stdbool.h>
-#include <time.h>
+#include <stdint.h>
 #include <math.h>
+#include <time.h>
 
-#include "esp_wifi.h"
+#include "esp_log.h"
 #include "esp_netif_sntp.h"
-
-#include "esp_err.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
-#include "wifi_manager.h"
-#include "i2c_interface.h"
-#include "tmp117.h"
-#include "max30102.h"
-#include "signal_processing.h"
-#include "heart_rate.h"
-#include "spo2.h"
-#include "json_formatter.h"
-#include "http_client.h"
+#include "buttons.h"
+#include "buzzer.h"
 #include "device_config.h"
+#include "driver_max30102_fifo.h"
+#include "driver_mpu6050_basic.h"
+#include "fall_detection.h"
+#include "heart_rate.h"
+#include "http_client.h"
+#include "i2c_interface.h"
+#include "indicators.h"
+#include "json_formatter.h"
+#include "signal_processing.h"
+#include "spo2.h"
+#include "tmp117.h"
+#include "wifi_manager.h"
 
+#ifndef DEVICE_ID
+#error "Add #define DEVICE_ID \"ESP32-C6-001\" to src/device_config.h"
+#endif
+#ifndef PATIENT_ID
+#error "Add #define PATIENT_ID \"PATIENT-001\" to src/device_config.h"
+#endif
 
-/******************************************************************************
- * Configuration Constants
- ******************************************************************************/
+#define SENSOR_PERIOD_MS       20U
+#define TEMP_PERIOD_MS       1000U
+#define TELEMETRY_PERIOD_MS  5000U
+#define POST_RETRY_MS        2000U
+#define WIFI_RETRY_MS        5000U
+#define ALERT_BEEP_MS         250U
+#define ALERT_TASK_PERIOD_MS   50U
+#define MAX_ADC_SAMPLE       0x3FFFFUL
+#define STARTUP_DISCARD      32U
+#define SPO2_WINDOW_SIZE     500U   /* 5 seconds at the configured 100 Hz */
+#define SPO2_REPORT_EVERY    100U   /* Recalculate SpO2 every 1 second */
+#define SPO2_SMOOTH_WINDOW     5U
 
-#define PPG_SAMPLE_RATE_HZ           100.0f
-#define PPG_SAMPLE_COUNT             1000
-#define PPG_MOVING_AVERAGE_WINDOW    7
-#define PPG_COLLECTION_TIMEOUT_MS    15000
+static const char *TAG = "MAIN";
 
-#define SENSOR_STARTUP_DELAY_MS        1000U
-#define COLLECTION_RETRY_DELAY_MS      1000U
-#define MEASUREMENT_CYCLE_DELAY_MS     1000U
+typedef struct {
+    float skin_temperature_c;
+    bool temperature_valid;
+    int heart_rate_bpm;
+    bool heart_rate_valid;
+    int spo2_percent;
+    bool spo2_valid;
+    float accel_magnitude_g;
+    float gyro_magnitude_dps;
+    bool imu_valid;
+    uint32_t last_red;
+    uint32_t last_ir;
+    uint32_t ppg_sample_count;
+    uint32_t pending_sos_count;
+    uint32_t pending_fall_count;
+    uint32_t beep_requests;
+    bool fall_reset_requested;
+} monitor_state_t;
 
-/******************************************************************************
- * Static Buffers
- ******************************************************************************/
+static monitor_state_t state;
+static SemaphoreHandle_t state_mutex;
 
-static uint32_t red_raw_samples[PPG_SAMPLE_COUNT];
-static uint32_t ir_raw_samples[PPG_SAMPLE_COUNT];
+/* All SpO2 work buffers are static so the 500-sample calculation does not
+ * consume the sensor task's FreeRTOS stack. Only sensor_task accesses them. */
+static uint32_t red_ring[SPO2_WINDOW_SIZE];
+static uint32_t ir_ring[SPO2_WINDOW_SIZE];
+static float red_raw[SPO2_WINDOW_SIZE];
+static float ir_raw[SPO2_WINDOW_SIZE];
+static float red_ac[SPO2_WINDOW_SIZE];
+static float ir_ac[SPO2_WINDOW_SIZE];
+static float red_filtered[SPO2_WINDOW_SIZE];
+static float ir_filtered[SPO2_WINDOW_SIZE];
+static uint32_t ring_next;
+static uint32_t ring_count;
+static uint32_t ppg_processed_samples;
 
-static float red_float_samples[PPG_SAMPLE_COUNT];
-static float red_ac_samples[PPG_SAMPLE_COUNT];
-static float red_filtered_samples[PPG_SAMPLE_COUNT];
-
-static float ir_float_samples[PPG_SAMPLE_COUNT];
-static float ir_ac_samples[PPG_SAMPLE_COUNT];
-static float ir_filtered_samples[PPG_SAMPLE_COUNT];
-
-/******************************************************************************
- * Application Entry Point
- ******************************************************************************/
-
-#define DEVICE_ID "ESP32-C6-DEMO"
-
-/**
- * @brief Main application entry point.
- *
- * Initializes the shared I2C bus, MAX30102, and TMP117 sensors. Verifies
- * communication with both sensors, starts continuous PPG measurements, and
- * repeatedly acquires temperature and PPG data.
- *
- * The red and IR MAX30102 samples are used to estimate SpO2. The IR signal is
- * also converted, DC-filtered, smoothed, and used to estimate heart rate.
- */
-void app_main(void)
+/* Uses the project's original algorithms without modifying them. */
+static void process_ppg_sample(uint32_t red, uint32_t ir)
 {
-    esp_err_t ret;
+    float bpm = 0.0f;
+    if (heart_rate_add_sample(ir, &bpm) &&
+        isfinite(bpm) && bpm >= 40.0f && bpm <= 180.0f) {
+        xSemaphoreTake(state_mutex, portMAX_DELAY);
+        state.heart_rate_bpm = (int)(bpm + 0.5f);
+        state.heart_rate_valid = true;
+        xSemaphoreGive(state_mutex);
+    }
 
-    /*
-     * Give the serial monitor time to reconnect after flashing or reset.
-     */
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    printf("\n");
-    printf("========================================\n");
-    printf(" Smart Senior Monitoring System\n");
-    printf("========================================\n");
-    printf("Application starting...\n");
-
-    /**************************************************************************
-     * I2C Initialization
-     **************************************************************************/
-
-    ret = i2c_interface_init();
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "I2C initialization failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
+    red_ring[ring_next] = red;
+    ir_ring[ring_next] = ir;
+    ring_next = (ring_next + 1U) % SPO2_WINDOW_SIZE;
+    if (ring_count < SPO2_WINDOW_SIZE) {
+        ring_count++;
+    }
+    ppg_processed_samples++;
+    if (ppg_processed_samples < SPO2_WINDOW_SIZE ||
+        ((ppg_processed_samples - SPO2_WINDOW_SIZE) % SPO2_REPORT_EVERY) != 0) {
         return;
     }
 
-    printf("I2C interface initialized successfully.\n");
-
-    /**************************************************************************
-     * MAX30102 Initialization
-     **************************************************************************/
-
-    ret = max30102_init();
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "MAX30102 initialization failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        return;
+    /* Oldest -> newest. The existing SpO2 module expects equally filtered
+     * AC samples plus the mean DC level of each unfiltered channel. */
+    for (uint32_t i = 0; i < SPO2_WINDOW_SIZE; i++) {
+        uint32_t index = (ring_next + i) % SPO2_WINDOW_SIZE;
+        red_raw[i] = (float)red_ring[index];
+        ir_raw[i] = (float)ir_ring[index];
     }
+    const float red_dc = signal_mean(red_raw, SPO2_WINDOW_SIZE);
+    const float ir_dc = signal_mean(ir_raw, SPO2_WINDOW_SIZE);
+    signal_remove_dc(red_raw, red_ac, SPO2_WINDOW_SIZE);
+    signal_remove_dc(ir_raw, ir_ac, SPO2_WINDOW_SIZE);
+    signal_moving_average(red_ac, red_filtered,
+                          SPO2_WINDOW_SIZE, SPO2_SMOOTH_WINDOW);
+    signal_moving_average(ir_ac, ir_filtered,
+                          SPO2_WINDOW_SIZE, SPO2_SMOOTH_WINDOW);
 
-    printf("MAX30102 initialized successfully.\n");
-
-    /*
-     * Brief delay before attempting to read the device ID.
-     */
-    vTaskDelay(pdMS_TO_TICKS(100));
-
-    uint8_t part_id = 0;
-
-    ret = max30102_read_part_id(&part_id);
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "MAX30102 part ID read failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        return;
+    spo2_result_t measurement;
+    if (spo2_calculate(red_filtered, ir_filtered, SPO2_WINDOW_SIZE,
+                       red_dc, ir_dc, &measurement) == ESP_OK &&
+        isfinite(measurement.spo2_percent) &&
+        measurement.spo2_percent >= 70.0f &&
+        measurement.spo2_percent <= 100.0f) {
+        xSemaphoreTake(state_mutex, portMAX_DELAY);
+        state.spo2_percent = (int)(measurement.spo2_percent + 0.5f);
+        state.spo2_valid = true;
+        xSemaphoreGive(state_mutex);
     }
+}
 
-    printf("MAX30102 Part ID: 0x%02X\n", part_id);
+static uint32_t uptime_ms(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 1000LL);
+}
 
-    if(part_id != MAX30102_PART_ID)
-    {
-        printf(
-            "Invalid MAX30102 Part ID: expected 0x%02X, "
-            "received 0x%02X\n",
-            MAX30102_PART_ID,
-            part_id
-        );
+static void max30102_callback(uint8_t type)
+{
+    (void)type;
+}
 
-        return;
-    }
+static void sensor_task(void *arg)
+{
+    (void)arg;
+    const bool temp_ready = (tmp117_init() == ESP_OK);
+    const bool imu_ready = (mpu6050_basic_init(MPU6050_ADDRESS_AD0_LOW) == 0);
+    const bool ppg_ready = (max30102_fifo_init(max30102_callback) == 0);
 
-    ret = max30102_start_measurement();
+    ESP_LOGI(TAG, "Sensors: TMP117=%s MPU6050=%s MAX30102=%s",
+             temp_ready ? "OK" : "FAILED",
+             imu_ready ? "OK" : "FAILED",
+             ppg_ready ? "OK" : "FAILED");
 
-    if(ret != ESP_OK)
-    {
-        printf(
-            "MAX30102 measurement start failed: %s\n",
-            esp_err_to_name(ret)
-        );
+    fall_detection_reset();
+    heart_rate_init();
+    ring_next = 0;
+    ring_count = 0;
+    ppg_processed_samples = 0;
+    uint32_t discarded_ppg = 0;
+    uint32_t next_temp_ms = 0;
+    uint32_t last_ppg_error_ms = 0;
+    uint32_t last_sensor_log_ms = 0;
+    TickType_t last_wake = xTaskGetTickCount();
 
-        return;
-    }
+    for (;;) {
+        uint32_t now = uptime_ms();
 
-    printf("MAX30102 measurement started.\n");
+        if (imu_ready) {
+            bool reset_requested;
+            xSemaphoreTake(state_mutex, portMAX_DELAY);
+            reset_requested = state.fall_reset_requested;
+            state.fall_reset_requested = false;
+            xSemaphoreGive(state_mutex);
+            if (reset_requested) {
+                fall_detection_reset();
+            }
 
-    /*
-     * Allow the optical signal and FIFO to stabilize before collecting the
-     * first full measurement window.
-     */
-    vTaskDelay(pdMS_TO_TICKS(SENSOR_STARTUP_DELAY_MS));
+            float accel[3], gyro[3];
+            if (mpu6050_basic_read(accel, gyro) == 0) {
+                fall_detection_calibrate_accel(accel);
+                fall_detection_calibrate_gyro(gyro);
+                float accel_g = fall_detection_accel_magnitude(accel);
+                float gyro_dps = fall_detection_gyro_magnitude(gyro);
+                xSemaphoreTake(state_mutex, portMAX_DELAY);
+                state.accel_magnitude_g = accel_g;
+                state.gyro_magnitude_dps = gyro_dps;
+                state.imu_valid = true;
+                xSemaphoreGive(state_mutex);
 
-    /**************************************************************************
-     * TMP117 Initialization
-     **************************************************************************/
-
-    ret = tmp117_init();
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "TMP117 initialization failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        return;
-    }
-
-    printf("TMP117 initialized successfully.\n");
-
-    uint16_t device_id = 0;
-
-    ret = tmp117_read_device_id(&device_id);
-
-    if(ret == ESP_OK)
-    {
-        printf("TMP117 Device ID register: 0x%04X\n", device_id);
-    }
-    else
-    {
-        printf(
-            "Failed to read TMP117 device ID: %s\n",
-            esp_err_to_name(ret)
-        );
-    }
-
-    printf("Sensor initialization complete.\n");
-
-    /**************************************************************************
-     * Wi-Fi Connection
-     **************************************************************************/
-
-    ret = wifi_manager_connect(
-        WIFI_SSID,
-        WIFI_PASSWORD
-    );
-
-    if(ret != ESP_OK)
-    {
-        printf(
-            "Wi-Fi connection failed: %s\n",
-            esp_err_to_name(ret)
-        );
-
-        printf("Continuing in offline mode.\n");
-    }
-    else
-    {
-        printf("Wi-Fi connected successfully.\n");
-    }
-
-    const bool wifi_connected = (ret == ESP_OK);
-
-    if (wifi_connected)
-    {
-        esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
-        esp_err_t sntp_ret = esp_netif_sntp_init(&sntp_config);
-        if (sntp_ret != ESP_OK)
-        {
-            printf("SNTP initialization failed: %s\n", esp_err_to_name(sntp_ret));
-        }
-    }
-
-    printf("Beginning measurement loop...\n\n");
-
-    /**************************************************************************
-     * Main Measurement Loop
-     **************************************************************************/
-
-    while(1)
-    {
-        int16_t raw_temperature = 0;
-        float temperature_c = 0.0f;
-        bool temperature_valid = false;
-
-        /**********************************************************************
-         * TMP117 Temperature Measurement
-         **********************************************************************/
-
-        ret = tmp117_read_raw_temperature(
-            &raw_temperature
-        );
-
-        if(ret == ESP_OK)
-        {
-            printf(
-                "Raw temperature: %d\n",
-                raw_temperature
-            );
-        }
-        else
-        {
-            printf(
-                "Raw temperature read failed: %s\n",
-                esp_err_to_name(ret)
-            );
+                if (fall_detection_update(accel_g, gyro_dps, now)) {
+                    xSemaphoreTake(state_mutex, portMAX_DELAY);
+                    state.pending_fall_count++;
+                    state.beep_requests++;
+                    xSemaphoreGive(state_mutex);
+                    ESP_LOGW(TAG, "Fall event detected; queued for backend");
+                }
+            } else {
+                xSemaphoreTake(state_mutex, portMAX_DELAY);
+                state.imu_valid = false;
+                xSemaphoreGive(state_mutex);
+            }
         }
 
-        ret = tmp117_read_temperature(
-            &temperature_c
-        );
-
-        if(ret == ESP_OK)
-        {
-            temperature_valid = true;
-            float temperature_f =
-                (temperature_c * 9.0f / 5.0f) + 32.0f;
-
-            printf(
-                "Temperature: %.3f C | %.2f F\n",
-                temperature_c,
-                temperature_f
-            );
-        }
-        else
-        {
-            printf(
-                "Temperature read failed: %s\n",
-                esp_err_to_name(ret)
-            );
+        if (temp_ready && (int32_t)(now - next_temp_ms) >= 0) {
+            float temperature_c = 0.0f;
+            esp_err_t ret = tmp117_read_temperature(&temperature_c);
+            xSemaphoreTake(state_mutex, portMAX_DELAY);
+            if (ret == ESP_OK && isfinite(temperature_c)) {
+                state.skin_temperature_c = temperature_c;
+                state.temperature_valid = true;
+            }
+            /* On a failed read, preserve the last valid temperature. */
+            xSemaphoreGive(state_mutex);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "TMP117 read failed: %s", esp_err_to_name(ret));
+            }
+            next_temp_ms = now + TEMP_PERIOD_MS;
         }
 
-        /**********************************************************************
-         * MAX30102 Sample Collection
-         **********************************************************************/
+        if (ppg_ready) {
+            uint32_t red[32], ir[32];
+            uint8_t length = 32;
+            if (max30102_fifo_read(red, ir, &length) == 0) {
+                if (length > 0) {
+                    uint8_t valid = 0;
+                    uint32_t latest_red = 0, latest_ir = 0;
+                    for (uint8_t i = 0; i < length; i++) {
+                        if (discarded_ppg < STARTUP_DISCARD) {
+                            discarded_ppg++;
+                            continue;
+                        }
+                        if (red[i] > MAX_ADC_SAMPLE || ir[i] > MAX_ADC_SAMPLE) {
+                            continue;
+                        }
+                        process_ppg_sample(red[i], ir[i]);
+                        valid++;
+                        latest_red = red[i];
+                        latest_ir = ir[i];
+                    }
+                    if (valid > 0) {
+                        xSemaphoreTake(state_mutex, portMAX_DELAY);
+                        state.last_red = latest_red;
+                        state.last_ir = latest_ir;
+                        state.ppg_sample_count += valid;
+                        xSemaphoreGive(state_mutex);
+                    }
+                }
+            } else if ((uint32_t)(now - last_ppg_error_ms) >= 5000U) {
+                ESP_LOGW(TAG, "MAX30102 FIFO read failed");
+                last_ppg_error_ms = now;
+            }
+        }
 
-        printf(
-            "Collecting %u PPG samples...\n",
-            (unsigned int)PPG_SAMPLE_COUNT
-        );
+        if ((uint32_t)(now - last_sensor_log_ms) >= 5000U) {
+            last_sensor_log_ms = now;
+            monitor_state_t snapshot;
+            xSemaphoreTake(state_mutex, portMAX_DELAY);
+            snapshot = state;
+            xSemaphoreGive(state_mutex);
+            if (ppg_ready && snapshot.ppg_sample_count > 0) {
+                ESP_LOGI(TAG, "MAX30102 raw RED=%lu IR=%lu samples=%lu",
+                         (unsigned long)snapshot.last_red,
+                         (unsigned long)snapshot.last_ir,
+                         (unsigned long)snapshot.ppg_sample_count);
+                if (snapshot.heart_rate_valid) {
+                    ESP_LOGI(TAG, "Last valid HR=%d BPM", snapshot.heart_rate_bpm);
+                }
+                if (snapshot.spo2_valid) {
+                    ESP_LOGI(TAG, "Last valid SpO2=%d%%", snapshot.spo2_percent);
+                }
+            }
+            if (temp_ready && snapshot.temperature_valid) {
+                ESP_LOGI(TAG, "TMP117 skin temperature=%.2f C",
+                         (double)snapshot.skin_temperature_c);
+            }
+            if (imu_ready && snapshot.imu_valid) {
+                ESP_LOGI(TAG, "MPU6050 acceleration=%.2f g rotation=%.1f dps",
+                         (double)snapshot.accel_magnitude_g,
+                         (double)snapshot.gyro_magnitude_dps);
+            }
+        }
 
-        ret = max30102_collect_samples(
-            red_raw_samples,
-            ir_raw_samples,
-            PPG_SAMPLE_COUNT,
-            PPG_COLLECTION_TIMEOUT_MS
-        );
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(SENSOR_PERIOD_MS));
+    }
+}
 
-        if(ret != ESP_OK)
-        {
-            printf(
-               "PPG sample collection failed: %s\n",
-               esp_err_to_name(ret)
-            );
+static void alert_task(void *arg)
+{
+    (void)arg;
+    QueueHandle_t button_queue = buttons_get_queue();
+    uint32_t seen_beep_requests = 0;
+    uint32_t beep_end_ms = 0;
+    uint32_t last_blink_ms = uptime_ms();
+    bool buzzer_active = false;
+    bool connection_led_on = false;
 
-            vTaskDelay(
-                pdMS_TO_TICKS(1000)
-            );
+    for (;;) {
+        button_t event;
+        while (xQueueReceive(button_queue, &event, 0) == pdTRUE) {
+            if (event == BUTTON_SOS) {
+                xSemaphoreTake(state_mutex, portMAX_DELAY);
+                state.pending_sos_count++;
+                state.beep_requests++;
+                xSemaphoreGive(state_mutex);
+                ESP_LOGW(TAG, "SOS pressed; queued for backend");
+            }
+        }
 
+        uint32_t beeps, pending_sos, pending_fall;
+        xSemaphoreTake(state_mutex, portMAX_DELAY);
+        beeps = state.beep_requests;
+        pending_sos = state.pending_sos_count;
+        pending_fall = state.pending_fall_count;
+        xSemaphoreGive(state_mutex);
+
+        uint32_t now = uptime_ms();
+        if (beeps != seen_beep_requests) {
+            seen_beep_requests = beeps;
+            buzzer_on();
+            buzzer_active = true;
+            beep_end_ms = now + ALERT_BEEP_MS;
+        }
+        if (buzzer_active && (int32_t)(now - beep_end_ms) >= 0) {
+            buzzer_off();
+            buzzer_active = false;
+        }
+
+        indicator_led_set(LED_ALERT, pending_sos > 0 || pending_fall > 0);
+        if (!wifi_manager_is_connected()) {
+            connection_led_on = false;
+            indicator_led_set(LED_CONNECTION, false);
+        } else if ((uint32_t)(now - last_blink_ms) >= 500U) {
+            last_blink_ms = now;
+            connection_led_on = !connection_led_on;
+            indicator_led_set(LED_CONNECTION, connection_led_on);
+        }
+
+        /* No battery ADC driver is available yet; don't invent a low-battery state. */
+        indicator_led_set(LED_LOW_BATTERY, false);
+        vTaskDelay(pdMS_TO_TICKS(ALERT_TASK_PERIOD_MS));
+    }
+}
+
+static bool make_utc_timestamp(char out[21])
+{
+    time_t now;
+    time(&now);
+    /* Reject an unset RTC (1970) instead of sending a fabricated timestamp. */
+    if (now < (time_t)1735689600) {
+        return false;
+    }
+    struct tm utc;
+    if (gmtime_r(&now, &utc) == NULL) {
+        return false;
+    }
+    return strftime(out, 21, "%Y-%m-%dT%H:%M:%SZ", &utc) == 20;
+}
+
+static void telemetry_task(void *arg)
+{
+    (void)arg;
+    bool sntp_started = false;
+    uint32_t last_sent_ms = uptime_ms();
+    uint32_t last_post_attempt_ms = 0;
+    uint32_t last_wifi_retry_ms = 0;
+    uint32_t last_wait_log_ms = 0;
+
+    for (;;) {
+        uint32_t now = uptime_ms();
+        if (!wifi_manager_is_connected()) {
+            if ((uint32_t)(now - last_wifi_retry_ms) >= WIFI_RETRY_MS) {
+                last_wifi_retry_ms = now;
+                (void)wifi_manager_reconnect();
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
 
-        /*
-         * Remove this printf if max30102_collect_samples() already prints
-         * the same success message.
-         */
-        printf(
-            "Collected %u PPG samples successfully.\n",
-            (unsigned int)PPG_SAMPLE_COUNT
-        );
-
-        /**********************************************************************
-         * Convert Raw PPG Samples
-         **********************************************************************/
-
-        signal_convert_u32_to_float(
-            red_raw_samples,
-            red_float_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        signal_convert_u32_to_float(
-            ir_raw_samples,
-            ir_float_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        /**********************************************************************
-         * Calculate Raw DC Levels
-         **********************************************************************/
-
-        float red_dc = signal_mean(
-            red_float_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float ir_dc = signal_mean(
-            ir_float_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        /**********************************************************************
-         * Remove DC Components
-         **********************************************************************/
-
-        signal_remove_dc(
-            red_float_samples,
-            red_ac_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        signal_remove_dc(
-            ir_float_samples,
-            ir_ac_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        /**********************************************************************
-         * Apply Identical Filtering
-         **********************************************************************/
-
-        signal_moving_average(
-            red_ac_samples,
-            red_filtered_samples,
-            PPG_SAMPLE_COUNT,
-            PPG_MOVING_AVERAGE_WINDOW
-        );
-
-        signal_moving_average(
-            ir_ac_samples,
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT,
-            PPG_MOVING_AVERAGE_WINDOW
-        );
-
-        /**********************************************************************
-         * Signal Diagnostics
-         **********************************************************************/
-
-        float red_min = signal_min(
-            red_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float red_max = signal_max(
-            red_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float red_peak_to_peak = signal_peak_to_peak(
-            red_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float red_rms = signal_rms(
-            red_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float ir_min = signal_min(
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float ir_max = signal_max(
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float ir_peak_to_peak = signal_peak_to_peak(
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        float ir_rms = signal_rms(
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT
-        );
-
-        printf(
-            "Red signal: min=%.2f, max=%.2f, "
-            "p-p=%.2f, RMS=%.2f, DC=%.2f\n",
-            red_min,
-            red_max,
-            red_peak_to_peak,
-            red_rms,
-            red_dc
-        );
-
-        printf(
-            "IR signal: min=%.2f, max=%.2f, "
-            "p-p=%.2f, RMS=%.2f, DC=%.2f\n",
-            ir_min,
-            ir_max,
-            ir_peak_to_peak,
-            ir_rms,
-            ir_dc
-        );
-
-        /**********************************************************************
-         * SpO2 Calculation
-         **********************************************************************/
-
-        spo2_result_t spo2_result;
-
-        esp_err_t spo2_ret = spo2_calculate(
-            red_filtered_samples,
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT,
-            red_dc,
-            ir_dc,
-            &spo2_result
-        );
-
-        if(spo2_ret == ESP_OK)
-        {
-            printf(
-                "SpO2: %.1f %% | "
-                "Raw SpO2=%.2f %% | "
-                "R=%.3f | "
-                "Red AC RMS=%.2f | "
-                "IR AC RMS=%.2f\n",
-                spo2_result.spo2_percent,
-                spo2_result.raw_spo2_percent,
-                spo2_result.ratio,
-                spo2_result.red_ac_rms,
-                spo2_result.ir_ac_rms
-            );
-        }
-        else
-        {
-            printf(
-                "SpO2 could not be calculated: %s. "
-                "Keep the sensor steady and maintain "
-                "consistent contact.\n",
-                esp_err_to_name(spo2_ret)
-            );
-        }
-
-        /**********************************************************************
-         * Heart-Rate Calculation
-         **********************************************************************/
-
-        float bpm = heart_rate_process(
-            ir_filtered_samples,
-            PPG_SAMPLE_COUNT,
-            PPG_SAMPLE_RATE_HZ
-        );
-
-        if(bpm > 0.0f)
-        {
-            printf(
-                "Heart rate: %.1f BPM\n",
-                bpm
-            );
-        }
-        else
-       {
-            printf(
-                "Heart rate could not be calculated. "
-                "Keep the sensor steady and maintain contact.\n"
-            );
-        }
-
-        // Do not serialize invalid or uninitialized sensor results.
-        if (!temperature_valid || !isfinite(temperature_c) ||
-            !isfinite(bpm) || bpm <= 0.0f ||
-            spo2_ret != ESP_OK || !isfinite(spo2_result.spo2_percent) ||
-            spo2_result.spo2_percent <= 0.0f ||
-            spo2_result.spo2_percent > 100.0f)
-        {
-            printf("Upload skipped: one or more sensor measurements are invalid.\n");
-        }
-        else if (!wifi_connected)
-        {
-            printf("Upload skipped: Wi-Fi was unavailable at startup.\n");
-        }
-        else
-        {
-            wifi_ap_record_t ap_info;
-            if (esp_wifi_sta_get_ap_info(&ap_info) != ESP_OK)
-            {
-                printf("Upload skipped: Wi-Fi is currently disconnected.\n");
+        if (!sntp_started) {
+            esp_sntp_config_t sntp_config = ESP_NETIF_SNTP_DEFAULT_CONFIG("time.google.com");
+            esp_err_t ret = esp_netif_sntp_init(&sntp_config);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "SNTP setup failed: %s", esp_err_to_name(ret));
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                continue;
             }
-            else
-            {
-                time_t now = time(NULL);
-                struct tm utc_time;
-                char timestamp[32];
+            sntp_started = true;
+        }
 
-                // Reject an unsynchronized clock rather than storing a fake time.
-                if (now < 1704067200 ||
-                    gmtime_r(&now, &utc_time) == NULL ||
-                    strftime(timestamp, sizeof(timestamp),
-                             "%Y-%m-%dT%H:%M:%SZ", &utc_time) == 0)
-                {
-                    printf("Upload skipped: waiting for valid UTC time from SNTP.\n");
-                }
-                else
-                {
-                    char json_buffer[JSON_BUFFER_SIZE];
-                    esp_err_t json_ret = json_format_sensor_data(
-                        json_buffer,
-                        sizeof(json_buffer),
-                        DEVICE_ID,
-                        timestamp,
-                        (int)bpm,
-                        (int)spo2_result.spo2_percent,
-                        temperature_c
-                    );
+        char timestamp[21];
+        if (!make_utc_timestamp(timestamp)) {
+            esp_err_t sync_result =
+            esp_netif_sntp_sync_wait(pdMS_TO_TICKS(2000));
 
-                    if (json_ret != ESP_OK)
-                    {
-                        printf("JSON formatting failed: %s\n",
-                               esp_err_to_name(json_ret));
-                    }
-                    else
-                    {
-                        printf("Prepared JSON: %s\n", json_buffer);
-                        esp_err_t http_ret = http_client_send_vitals(
-                            BACKEND_URL,
-                            DEVICE_API_KEY,
-                            json_buffer
-                        );
-                        printf(http_ret == ESP_OK ?
-                               "Vitals successfully uploaded.\n" :
-                               "Vitals upload failed.\n");
-                    }
-                }
+            ESP_LOGI(TAG, "SNTP sync result: %s", esp_err_to_name(sync_result));
+            
+            if (!make_utc_timestamp(timestamp)) {
+                ESP_LOGW(TAG, "Waiting for UTC time synchronization");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                continue;
             }
         }
 
-        printf(
-            "----------------------------------------\n"
-        );
+        monitor_state_t snapshot;
+        xSemaphoreTake(state_mutex, portMAX_DELAY);
+        snapshot = state;
+        xSemaphoreGive(state_mutex);
 
-        vTaskDelay(
-            pdMS_TO_TICKS(1000)
+        now = uptime_ms();
+        /* The backend rejects nulls. Do not invent vital signs before the
+         * first successful measurements; pending SOS/fall events stay queued. */
+        if (!snapshot.heart_rate_valid || !snapshot.spo2_valid ||
+            !snapshot.temperature_valid) {
+            if ((uint32_t)(now - last_wait_log_ms) >= 5000U) {
+                last_wait_log_ms = now;
+                ESP_LOGW(TAG, "Waiting for initial valid HR=%d SpO2=%d TEMP=%d",
+                         snapshot.heart_rate_valid, snapshot.spo2_valid,
+                         snapshot.temperature_valid);
+            }
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        bool pending = (snapshot.pending_sos_count > 0 || snapshot.pending_fall_count > 0);
+        bool periodic_due = (uint32_t)(now - last_sent_ms) >= TELEMETRY_PERIOD_MS;
+        bool retry_allowed = last_post_attempt_ms == 0 ||
+                             (uint32_t)(now - last_post_attempt_ms) >= POST_RETRY_MS;
+        if ((!periodic_due && !pending) || !retry_allowed) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        char json[JSON_BUFFER_SIZE];
+        esp_err_t err = json_format_sensor_data(
+            json, sizeof(json), DEVICE_ID, PATIENT_ID, timestamp,
+            snapshot.heart_rate_bpm, snapshot.spo2_percent,
+            snapshot.skin_temperature_c, snapshot.temperature_valid,
+            snapshot.pending_fall_count > 0,
+            snapshot.pending_sos_count > 0
         );
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "JSON formatting failed: %s", esp_err_to_name(err));
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+        }
+
+        ESP_LOGI(TAG, "POST %s", json);
+        last_post_attempt_ms = now;
+        err = http_client_send_vitals(BACKEND_URL, DEVICE_API_KEY, json);
+        if (err == ESP_OK) {
+            last_sent_ms = uptime_ms();
+            xSemaphoreTake(state_mutex, portMAX_DELAY);
+            /* Acknowledge only the events included in THIS successful POST.
+             * A new SOS press while HTTP was in flight remains pending. */
+            if (snapshot.pending_sos_count > 0 && state.pending_sos_count > 0) {
+                state.pending_sos_count--;
+            }
+            if (snapshot.pending_fall_count > 0 && state.pending_fall_count > 0) {
+                state.pending_fall_count--;
+                if (state.pending_fall_count == 0) {
+                    state.fall_reset_requested = true;
+                }
+            }
+            xSemaphoreGive(state_mutex);
+        } else {
+            ESP_LOGW(TAG, "POST failed; pending SOS/fall flags retained for retry");
+        }
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+void app_main(void)
+{
+    state_mutex = xSemaphoreCreateMutex();
+    if (state_mutex == NULL) {
+        ESP_LOGE(TAG, "Cannot allocate state mutex");
+        return;
+    }
+
+    ESP_ERROR_CHECK(indicators_init());
+    ESP_ERROR_CHECK(indicator_led_set(LED_POWER, true));
+    ESP_ERROR_CHECK(buzzer_init());
+    ESP_ERROR_CHECK(buttons_init());
+    ESP_ERROR_CHECK(buttons_start_task());
+    ESP_ERROR_CHECK(i2c_interface_init());
+
+    if (xTaskCreate(sensor_task, "sensor_task", 6144, NULL, 5, NULL) != pdPASS ||
+        xTaskCreate(alert_task, "alert_task", 3072, NULL, 5, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Could not start sensor/alert tasks");
+        return;
+    }
+
+    /* Button and sensor tasks keep running while Wi-Fi connects. */
+    esp_err_t wifi_ret = wifi_manager_connect(WIFI_SSID, WIFI_PASSWORD);
+    if (wifi_ret != ESP_OK) {
+        ESP_LOGW(TAG, "Initial Wi-Fi connection failed; will retry");
+    }
+
+    if (xTaskCreate(telemetry_task, "telemetry_task", 6144, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Could not start telemetry task");
     }
 }

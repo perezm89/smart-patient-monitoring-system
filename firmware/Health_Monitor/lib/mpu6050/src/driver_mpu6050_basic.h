@@ -54,13 +54,13 @@ extern "C"{
  * @brief mpu6050 basic example default definition
  */
 #define MPU6050_BASIC_DEFAULT_CLOCK_SOURCE                   MPU6050_CLOCK_SOURCE_PLL_X_GYRO           /**< gyro pll x */
-#define MPU6050_BASIC_DEFAULT_RATE                           50                                        /**< 50Hz */
+#define MPU6050_BASIC_DEFAULT_RATE                           100                                        /**< 100Hz */
 #define MPU6050_BASIC_DEFAULT_LOW_PASS_FILTER                MPU6050_LOW_PASS_FILTER_3                 /**< low pass filter 3 */
 #define MPU6050_BASIC_DEFAULT_CYCLE_WAKE_UP                  MPU6050_BOOL_FALSE                        /**< disable cycle wake up */
 #define MPU6050_BASIC_DEFAULT_WAKE_UP_FREQUENCY              MPU6050_WAKE_UP_FREQUENCY_1P25_HZ         /**< 1.25Hz */
 #define MPU6050_BASIC_DEFAULT_INTERRUPT_PIN_LEVEL            MPU6050_PIN_LEVEL_LOW                     /**< low level */
 #define MPU6050_BASIC_DEFAULT_INTERRUPT_PIN_TYPE             MPU6050_PIN_TYPE_PUSH_PULL                /**< push pull */
-#define MPU6050_BASIC_DEFAULT_ACCELEROMETER_RANGE            MPU6050_ACCELEROMETER_RANGE_2G            /**< 2g */
+#define MPU6050_BASIC_DEFAULT_ACCELEROMETER_RANGE            MPU6050_ACCELEROMETER_RANGE_8G            /**< 8g */
 #define MPU6050_BASIC_DEFAULT_GYROSCOPE_RANGE                MPU6050_GYROSCOPE_RANGE_2000DPS           /**< 2000dps */
 #define MPU6050_BASIC_DEFAULT_INTERRUPT_MOTION               MPU6050_BOOL_FALSE                        /**< disable motion */
 #define MPU6050_BASIC_DEFAULT_INTERRUPT_FIFO_OVERFLOW        MPU6050_BOOL_FALSE                        /**< disable fifo overflow */

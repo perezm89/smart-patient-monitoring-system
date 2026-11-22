@@ -1,0 +1,6 @@
+{
+  "name": "ppg_processing",
+  "version": "0.1.0",
+  "description": "100 Hz MAX30102 samples to 25 Hz Maxim HR/SpO2 calculations",
+  "dependencies": [ { "name": "maxim_spo2" } ]
+}
