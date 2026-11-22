@@ -1,0 +1,3 @@
+firmware/Health_Monitor/lib/mpu6050/** linguist-vendored
+firmware/Health_Monitor/lib/max30102_libdrive/** linguist-vendored
+firmware/Health_Monitor/lib/maxim_spo2/** linguist-vendored
