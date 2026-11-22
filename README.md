@@ -25,13 +25,10 @@ Measurements and events include:
 
 ### Assembled Wearable Prototype
 
-**[PHOTO PLACEHOLDER — Assembled Wearable Prototype]**
 
 ![Assembled wearable prototype — add image to docs/images/wearable-prototype.jpg](docs/images/wearable-prototype.jpg)
 
 *Figure 1. Custom wearable enclosure with adjustable straps and a visible status indicator.*
-
-> **Image setup:** Add the photo as `docs/images/wearable-prototype.jpg`. Until then, the image link will appear broken in GitHub; you can temporarily remove the `![...]` line while keeping the heading and caption.
 
 ## System Architecture
 
